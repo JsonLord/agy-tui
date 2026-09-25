@@ -1,3 +1,8 @@
+import ast
+import re
+from pathlib import Path
+from typing import Any
+
 def extract_source_evidence(repo_root: str, node_strings: list[str]) -> list[dict[str, Any]]:
     """
     Extracts source evidence from Graphify node strings.
