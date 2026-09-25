@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-
+# Repository root (this file lives at app/investigation/graph_manager.py)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 GRAPHIFY_BIN = Path(
@@ -18,10 +18,10 @@ GRAPHIFY_BIN = Path(
     )
 )
 
+# Canonical env file carrying Graphify's backend configuration
 GRAPHIFY_ENV_FILE = (
     Path.home() / ".config" / "graphify.env"
 )
-
 STATE_ROOT = (
     PROJECT_ROOT / "state" / "repositories"
 )
@@ -56,17 +56,17 @@ def graphify_env() -> dict[str, str]:
         key = key.strip()
         value = value.strip()
 
-        if (
-            len(value) >= 2
-            and value[0] == value[-1]
-            and value[0] in {"'", '"'}
-        ):
-            value = value[1:-1]
+        # strip matching surrounding quotes
+        if len(value) >= 2 and value[0] == value[-1]:
+            if value[0] in {'"', "'"}:
+                value = value[1:-1]
 
-        if key:
-            env[key] = value
+        if not key:
+            continue
+        env[key] = value
 
     return env
+
 
 
 def _run(
@@ -90,7 +90,7 @@ def repo_id(repo: Path) -> str:
 
     return hashlib.sha256(
         str(repo).encode()
-    ).hexdigest()[:16]
+    ).hexdigest()[None:16]
 
 
 def repository_state_dir(repo: Path) -> Path:
@@ -109,10 +109,10 @@ def _is_git_repo(repo: Path) -> bool:
             "rev-parse",
             "--is-inside-work-tree",
         ],
+
         cwd=repo,
         timeout=10,
     )
-
     return (
         result.returncode == 0
         and result.stdout.strip() == "true"
@@ -155,6 +155,7 @@ def _git_fingerprint(repo: Path) -> str:
     h.update(diff.stdout)
 
     untracked = _run(
+
         [
             "git",
             "ls-files",
@@ -162,19 +163,19 @@ def _git_fingerprint(repo: Path) -> str:
             "--exclude-standard",
             "-z",
         ],
+
         cwd=repo,
         timeout=30,
     )
 
-    for rel in untracked.stdout.split("\0"):
+    for rel in untracked.stdout.split("\x00"):
         if not rel:
             continue
 
-        # Never invalidate the graph because Graphify itself
-        # wrote files into graphify-out/.
-        if (
-            rel == "graphify-out"
-            or rel.startswith("graphify-out/")
+        # Graphify's own output must not feed back into
+        # the fingerprint of the repository it indexes
+        if rel == "graphify-out" or rel.startswith(
+            "graphify-out/"
         ):
             continue
 
@@ -186,23 +187,22 @@ def _git_fingerprint(repo: Path) -> str:
             stat = path.stat()
 
             h.update(
-                str(stat.st_size).encode()
+                str(stat.st_size).encode(),
             )
             h.update(
-                str(stat.st_mtime_ns).encode()
+                str(stat.st_mtime_ns).encode(),
             )
 
-            if (
-                path.is_file()
-                and stat.st_size <= 2_000_000
-            ):
-                h.update(path.read_bytes())
+            # content of small files is part of identity;
+            # large files only contribute metadata
+            if path.is_file():
+                if stat.st_size <= 2000000:
+                    h.update(path.read_bytes())
 
         except OSError:
-            pass
+            continue
 
     return h.hexdigest()
-
 
 def _filesystem_fingerprint(repo: Path) -> str:
     h = hashlib.sha256()
@@ -213,10 +213,9 @@ def _filesystem_fingerprint(repo: Path) -> str:
         except ValueError:
             continue
 
-        if (
-            ".git" in rel.parts
-            or "graphify-out" in rel.parts
-        ):
+        if ".git" in rel.parts:
+            continue
+        if "graphify-out" in rel.parts:
             continue
 
         if not path.is_file():
@@ -234,13 +233,14 @@ def _filesystem_fingerprint(repo: Path) -> str:
     return h.hexdigest()
 
 
+
 def repository_fingerprint(repo: Path) -> str:
     repo = repo.expanduser().resolve()
-
     if _is_git_repo(repo):
         return _git_fingerprint(repo)
 
     return _filesystem_fingerprint(repo)
+
 
 
 def ensure_graph(repo: Path) -> dict[str, Any]:
@@ -278,13 +278,14 @@ def ensure_graph(repo: Path) -> dict[str, Any]:
             previous = json.loads(
                 state_file.read_text()
             )
+
         except Exception:
             previous = {}
 
+    # reuse only when the current fingerprint still matches
     if (
         graph_path.exists()
-        and previous.get("fingerprint")
-        == fingerprint
+        and previous.get("fingerprint") == fingerprint
     ):
         return {
             "status": "reused",
@@ -319,12 +320,12 @@ def ensure_graph(repo: Path) -> dict[str, Any]:
 
     if not graph_path.exists():
         raise RuntimeError(
-            "Graphify returned successfully but "
-            "graphify-out/graph.json is missing."
+            "Graphify returned successfully but graphify-out/graph.json is missing."
         )
 
-    # Recalculate after extraction. graphify-out itself is
-    # excluded from the fingerprint.
+    # recompute after extraction; graphify-out is excluded
+    # from the fingerprint, so this stays stable for reuse
+    # checks on unchanged repositories
     fingerprint = repository_fingerprint(repo)
 
     state = {
@@ -339,40 +340,40 @@ def ensure_graph(repo: Path) -> dict[str, Any]:
     }
 
     state_file.write_text(
-        json.dumps(state, indent=2)
-        + "\n"
+        json.dumps(state, indent=2) + "\n"
     )
 
-    (
-        state_dir / "last-extract.log"
-    ).write_text(log)
+    # keep the raw extractor output for local debugging
+    (state_dir / "last-extract.log").write_text(
+        log
+    )
 
     return {
         "status": "rebuilt",
-        **state,
-    }
+    } | state
 
 
-def query_graph(
-    repo: Path,
-    query: str,
-) -> dict[str, Any]:
+def query_graph(repo: Path, query: str) -> dict[str, Any]:
     """
     Query the local Graphify graph.
 
     Full raw output remains local. A parsed structural form is
     returned for consumption by local models.
     """
+    # keep every entry point on a resolved absolute path
+    # so state lookups and subprocess cwd always agree
     repo = repo.expanduser().resolve()
 
     graph_state = ensure_graph(repo)
 
     result = _run(
+
         [
             str(GRAPHIFY_BIN),
             "query",
             query,
         ],
+
         cwd=repo,
         timeout=90,
     )
@@ -396,11 +397,10 @@ def query_graph(
     files: list[str] = []
     nodes: list[str] = []
     relationships: list[str] = []
-
-    def add_unique(
-        target: list[str],
-        value: str,
-    ) -> None:
+    def add_unique(target: list[str], value: str) -> None:
+        # Graphify repeats entries across traversal
+        # branches of the query result; keep only the
+        # first occurrence of every item.
         if value and value not in target:
             target.append(value)
 

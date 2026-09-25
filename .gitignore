@@ -13,3 +13,8 @@ __pycache__/
 .vscode/
 .idea/
 .pytest_cache/
+
+# Local recovery/runtime artifacts
+recovery/investigator/*.dump
+recovery/investigator/acceptance/*.json
+test-workspace/
