@@ -22,7 +22,6 @@ GRAPHIFY_BIN = Path(
 GRAPHIFY_ENV_FILE = (
     Path.home() / ".config" / "graphify.env"
 )
-# Per-repository graph state lives outside the repository
 STATE_ROOT = (
     PROJECT_ROOT / "state" / "repositories"
 )
