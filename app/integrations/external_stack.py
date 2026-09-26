@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -197,6 +198,23 @@ def supervisor_status(returncode: int) -> str:
     return "ERROR"
 
 
+SESSION_ID_PATTERN = re.compile(r"^ses_[A-Za-z0-9]+$")
+
+def validate_session_id(raw: str) -> str:
+    """
+    Fail before any side effects on a malformed explicit session.
+    Mirrors opencode-supervise's ``ses_`` contract.
+    """
+    candidate = (raw or "").strip()
+
+    if not candidate:
+        raise ValueError("session id must not be empty")
+
+    if not SESSION_ID_PATTERN.match(candidate):
+        raise ValueError("malformed session id " + repr(raw))
+
+    return candidate
+
 def run_supervised(
     repo: str | Path,
     task: str,
@@ -207,6 +225,7 @@ def run_supervised(
     max_restarts: int = 1,
     timeout: int = 300,
     cloud_led: bool = True,
+    session: str | None = None,
 ) -> ExternalResult:
     """
     Execute a coding task through the existing isolated
@@ -256,23 +275,32 @@ LOCAL REPOSITORY NAVIGATION POLICY:
         + navigation_policy
     )
 
+    command = [
+        str(OPENCODE_SUPERVISE),
+        "--repo",
+        str(repo),
+        "--agent",
+        agent,
+        "--server",
+        OPENCODE_SERVER,
+        "--repeat-limit",
+        str(repeat_limit),
+        "--stall-seconds",
+        str(stall_seconds),
+        "--max-restarts",
+        str(max_restarts),
+    ]
+
+    if session is not None:
+        # Session binding: inserted before the prompt, matching the
+        # supervisor's own --session contract. Validated first so a
+        # malformed id fails before any process is launched.
+        command += ["--session", validate_session_id(session)]
+
+    command.append(execution_task)
+
     proc = subprocess.Popen(
-        [
-            str(OPENCODE_SUPERVISE),
-            "--repo",
-            str(repo),
-            "--agent",
-            agent,
-            "--server",
-            OPENCODE_SERVER,
-            "--repeat-limit",
-            str(repeat_limit),
-            "--stall-seconds",
-            str(stall_seconds),
-            "--max-restarts",
-            str(max_restarts),
-            execution_task,
-        ],
+        command,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
