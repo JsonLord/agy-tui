@@ -55,8 +55,16 @@ DEFAULT_NEEDLE_BASE_URL = "https://leon4gr45-needle.hf.space"
 DEFAULT_SUPERVISOR_MODEL = "alias-mimo-v2.6-pro"
 DEFAULT_DISPATCH_MODEL = "alias-mimo-v2.6-flash"
 
+# P3 failover binding: each role has ONE fallback model (verbatim
+# from the failover architecture contract). Env-configurable, the
+# defaults are fixed and match the agy-*-fallback OpenCode agents.
+DEFAULT_SUPERVISOR_FALLBACK_MODEL = "alias-qwen3.8-27b"
+DEFAULT_DISPATCH_FALLBACK_MODEL = "alias-qwen3.8-flash-next"
+
 ENV_SUPERVISOR_MODEL = "SUPERVISOR_MODEL"
 ENV_DISPATCH_MODEL = "DISPATCH_MODEL"
+ENV_SUPERVISOR_FALLBACK_MODEL = "AGY_SUPERVISOR_FALLBACK_MODEL"
+ENV_DISPATCH_FALLBACK_MODEL = "AGY_DISPATCH_FALLBACK_MODEL"
 ENV_PROVIDER_BASE_URL = "AGY_PROVIDER_BASE_URL"
 ENV_PROVIDER_API_KEY = "AGY_PROVIDER_API_KEY"
 ENV_NEEDLE_BASE_URL = "NEEDLE_BASE_URL"
@@ -223,6 +231,8 @@ class AgySettings:
     provider_api_key: str | None
     lifecycle: SupervisorLifecycle
     needle: NeedleSettings
+    supervisor_fallback_model: str = DEFAULT_SUPERVISOR_FALLBACK_MODEL
+    dispatch_fallback_model: str = DEFAULT_DISPATCH_FALLBACK_MODEL
 
     @classmethod
     def from_env(
@@ -249,4 +259,12 @@ class AgySettings:
             ),
             lifecycle=SupervisorLifecycle.from_env(env),
             needle=NeedleSettings.from_env(env),
+            supervisor_fallback_model=(
+                env.get(ENV_SUPERVISOR_FALLBACK_MODEL, "").strip()
+                or DEFAULT_SUPERVISOR_FALLBACK_MODEL
+            ),
+            dispatch_fallback_model=(
+                env.get(ENV_DISPATCH_FALLBACK_MODEL, "").strip()
+                or DEFAULT_DISPATCH_FALLBACK_MODEL
+            ),
         )
