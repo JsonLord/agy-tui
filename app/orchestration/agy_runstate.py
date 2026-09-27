@@ -114,6 +114,57 @@ class StageRunState:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
+    # -- plan document (P6) ---------------------------------------------------
+
+    PLAN_DOC_NAME = "plan_doc.json"
+
+    def save_plan_doc(self, plan: Any) -> Path:
+        """
+        Persist the ORIGINAL plan document at plan start (P6): the
+        ``DevelopmentPlan`` (or its plain dict form) exactly as the run
+        began, at ``<plan_dir>/plan_doc.json``, so a fresh process on
+        restart can load the EXACT plan that ran — resume drivers load
+        ``plan_doc.json`` and never re-type the plan.
+
+        Idempotent on rerun: writing the identical document is a
+        no-op; a DIFFERENT document for the same plan_id raises
+        ``ValueError`` (the original plan of record is immutable
+        evidence and must never be silently overwritten).
+        """
+        if hasattr(plan, "model_dump"):
+            payload = plan.model_dump(mode="json")
+        elif isinstance(plan, dict):
+            payload = plan
+        else:
+            raise TypeError(
+                "save_plan_doc expects a DevelopmentPlan or dict, got "
+                f"{type(plan).__name__}"
+            )
+
+        path = self.plan_dir / self.PLAN_DOC_NAME
+        text = json.dumps(payload, sort_keys=True, indent=2) + "\n"
+        if path.exists():
+            if path.read_text(encoding="utf-8") == text:
+                return path
+            raise ValueError(
+                "plan document already persisted with different "
+                f"content: {path} (the original plan of record is "
+                "immutable; refusing to overwrite)"
+            )
+
+        self.plan_dir.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+        return path
+
+    def load_plan_doc(self) -> dict[str, Any] | None:
+        """Recovery: read ``plan_doc.json`` back (``None`` when absent)."""
+        path = self.plan_dir / self.PLAN_DOC_NAME
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
     # -- stage-level (P3 API, unchanged) -----------------------------------
 
     def require_stage_dir(self) -> Path:

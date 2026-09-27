@@ -70,6 +70,55 @@ bridge over that resolver, so ``StageRunResult.session_ids`` and the
 per-task records carry the ids the server provably has, and the
 per-task ``session_source`` records HOW each id was captured
 (``stdout`` / ``known`` / ``readback`` / ``none``).
+
+P6 RESUME + EVIDENCE (contract §2 — all three seams are OPTIONAL and
+default to ``False``/``None``, so the P5 call path is unchanged):
+
+* ``resume=false`` -> as before. ``resume=True`` -> before each
+  stage, ``agy_resume.recovery_state`` consults the persisted
+  artifacts: ``STAGE_ACCEPTED`` stages are SKIPPED ENTIRELY (the
+  executor is never even built — ``make_executor`` is not called for
+  them) and their persisted ``StageRunResult`` is carried verbatim
+  into the result; ``STAGE_COMMITTED`` / ``TASK_VERIFIED`` re-enter
+  at their boundary through ``agy_resume.run_stage_boundary_gate``
+  (supervisor-only / gates-without-dispatch; ``TASK_VERIFIED`` never
+  re-dispatches tasks — its stage acceptance + cumulative gate rerun
+  through ``run_command``, which is also how P3's "verification
+  always reruns" holds — matching contract test item 4); every other
+  state runs the stage normally through P3 (verification never
+  weakens on an incomplete boundary). A seed step first restores the
+  persisted aggregates (failover events, repair lineage, sessions,
+  gate reviews, stage results) so the run re-enters instead of
+  restarting, and the bounded plan-repair budget keeps counting from
+  the persisted ``repair_lineage``.
+  A persistently ``PLAN_ACCEPTED`` run state returns the persisted
+  result idempotently — no model calls, no new commits — with the
+  ``PLAN_ALREADY_ACCEPTED`` event.
+* ``timeline`` (an ``agy_timeline.Timeline`` or ``None``) — when
+  attached, the run append-only emits plan/stage/task/gate events
+  (``PLAN_STARTED`` once per fresh process — resumed runs emit
+  ``RUN_RESUMED`` instead of ``PLAN_STARTED`` — ``STAGE_STARTED``,
+  ``TASK_DISPATCHED``/``TASK_COMPLETED``/``TASK_VERIFIED`` at the
+  injected dispatch/verify seams so a killed run's stream is true,
+  ``STAGE_COMMITTED``, ``STAGE_ACCEPTED``,
+  ``PLAN_REPAIR_REQUESTED`` on each bounded repair cycle,
+  ``MODEL_FAILOVER`` once per newly aggregated failover event, and
+  terminal ``PLAN_ACCEPTED``/``PLAN_REJECTED``), then writes
+  ``observability.json`` at plan end. With ``timeline=None`` no
+  event logic runs.
+* ``commit_gate_writer`` — ``callable(record) -> Path | None`` for
+  the first-class ``agy_commitgate.CommitGateRecord`` evidence. The
+  stage-commit gate point writes one record per stage commit and the
+  plan-gate point writes ``commits/plan-gate.json``; with no writer
+  injected (but a ``run_state`` present) the records are persisted
+  into the run dir by ``agy_commitgate.persist_commit_gate_record``,
+  with the CONSTRAINED decision (P4 deterministic override applied)
+  as its input.
+
+Plan restarts must not re-type a plan: plan start also persists the
+ORIGINAL document via ``run_state.save_plan_doc(plan)`` to
+``state/runs/<plan_id>/plan_doc.json`` (idempotent; a different
+document for the same plan_id is a hard error).
 """
 
 from __future__ import annotations
@@ -93,7 +142,7 @@ from app.orchestration.agy_execute import (
     execute_stage,
 )
 from app.orchestration.agy_runstate import PlanRunState, StageRunState
-from app.orchestration.agy_session import SOURCE_NONE
+from app.orchestration.agy_session import SOURCE_KNOWN, SOURCE_NONE
 from app.orchestration.plan_decompose import stage_execution_order
 from app.schemas import AcceptanceCommand, DevelopmentPlan, PlanStage
 
@@ -121,6 +170,20 @@ def _clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3].rstrip() + "..."
+
+
+def _scalar(value: Any) -> Any:
+    """
+    Timeline-safe scalar for event fields: plain scalars pass,
+    enum-like values unwrap to their ``value``, anything else
+    stringifies (events never carry nested state).
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raw = getattr(value, "value", None)
+    if isinstance(raw, (str, int, float, bool)):
+        return raw
+    return str(value)
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -302,6 +365,64 @@ class _EventSink:
             return
         if _append_event(self.events, event) and self._forward is not None:
             self._forward(event)
+
+
+class _ResumeResolver:
+    """
+    P6 session resolver for a resumed stage: the injected resume
+    policy (``agy_resume.ResumeSessionPolicy``) composed with the
+    executor's own session log.
+
+    * a REUSE hint resolves the stage's dispatched tasks to the
+      recovered ``"known"`` session (the persisted boundary is the
+      record of the task's session);
+    * everything else (continuation, unhinted tasks) resolves to the
+      session THIS run's executor actually observed FIRST — so a
+      fresh session can never be reported as anything else — and
+      finally to the caller's capturer.
+
+    ``hint_for`` exposes the raw hint so task records can carry the
+    explicit ``parent_session_id``/``continuation_reason`` lineage.
+    """
+
+    is_resume_resolver = True
+
+    def __init__(self, policy: Any, executor_log: Any, owner: Any) -> None:
+        self.policy = policy
+        self.executor_log = executor_log
+        self.owner = owner
+
+    def hint_for(self, task_id: str) -> dict[str, Any] | None:
+        return self.policy.hint_for(task_id)
+
+    def get(self, task_id: str) -> dict[str, Any] | None:
+        hint = self.policy.hint_for(task_id)
+        if isinstance(hint, dict) and hint.get("kind") == "reuse":
+            return {
+                "session_id": hint.get("session_id"),
+                "source": SOURCE_KNOWN,
+            }
+        if self.executor_log is not None:
+            getter = getattr(self.executor_log, "get", None)
+            if callable(getter):
+                record = getter(task_id)
+                if isinstance(record, dict) and record.get("session_id"):
+                    return {
+                        "session_id": record.get("session_id"),
+                        "source": record.get("source") or SOURCE_NONE,
+                    }
+        owner_record = self.policy.get(task_id)
+        if isinstance(hint, dict) and hint.get("kind") == "continuation":
+            # The recovered (stale) id is NEVER reported as the
+            # task's session — only its lineage is preserved (task
+            # records + SESSION_CONTINUATION event carry the parent).
+            if (
+                isinstance(owner_record, dict)
+                and owner_record.get("session_id")
+                == hint.get("parent_session_id")
+            ):
+                return None
+        return owner_record
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +672,9 @@ async def execute_plan(
     on_stage=None,
     on_failover_event=None,
     max_plan_repairs: int = 1,
+    resume: bool = False,
+    timeline=None,
+    commit_gate_writer=None,
 ) -> PlanRunResult:
     """
     Execute a full development plan; see the module docstring's
@@ -579,7 +703,11 @@ async def execute_plan(
       stage (may be async); ``on_failover_event`` receives plan-gate
       failover events directly — stage events arrive with their stage
       results;
-    * ``max_plan_repairs`` bounds the plan-repair cycles (default 1).
+    * ``max_plan_repairs`` bounds the plan-repair cycles (default 1);
+    * ``resume=False`` (P5 behavior with no change), ``timeline=None``
+      (no events), ``commit_gate_writer=None`` (default evidence
+      writer into the run dir) — the three P6 seams documented in the
+      module docstring.
     """
     _ = (settings, repo)  # carried for live wiring symmetry
 
@@ -604,6 +732,39 @@ async def execute_plan(
     repair_context: _RepairContext | None = None
     stopped_stage_result = None
 
+    # -- P6 resume preamble: terminal check + timeline seam ------------------
+    persisted_plan: dict[str, Any] | None = None
+    if resume:
+        if run_state is None:
+            raise ValueError(
+                "execute_plan(resume=True) requires a persisted run_state"
+            )
+        persisted_plan = run_state.load_plan()
+        if (
+            persisted_plan is not None
+            and persisted_plan.get("status") == PLAN_ACCEPTED
+        ):
+            # Terminal persistence-only return: NO executor, no gate
+            # commands, no supervisor, no writes — the accepted plan
+            # stands (contract §2 terminal branch).
+            if timeline is not None:
+                timeline.emit(
+                    "PLAN_ALREADY_ACCEPTED",
+                    plan_id=plan.plan_id,
+                    status=PLAN_ACCEPTED,
+                )
+            from app.orchestration.agy_resume import (
+                plan_run_result_from_persisted,
+            )
+
+            return plan_run_result_from_persisted(persisted_plan)
+
+    def emit(event_type: str, **fields: Any) -> None:
+        """Timeline seam: fires ONLY when a Timeline is attached."""
+        if timeline is None:
+            return
+        timeline.emit(event_type, plan_id=plan.plan_id, **fields)
+
     # -- persistence helpers -------------------------------------------------
 
     def persist_plan() -> None:
@@ -622,14 +783,30 @@ async def execute_plan(
     def task_record(task_result: dict, resolver: Any) -> dict:
         """Per-task run-state record WITH the session source (P4)."""
         record = dict(task_result)
-        captured = _session_record(
-            resolver, record.get("worker_task_id")
-        ) or {}
+        task_ref = record.get("worker_task_id") or record.get("task_id")
+        captured = _session_record(resolver, task_ref) or {}
         record["session_id"] = record.get("session_id") or captured.get(
             "session_id"
         )
-        record["session_source"] = captured.get("source") or SOURCE_NONE
+        # Captured source first, then a source the record already
+        # carries (P6 boundary re-entries reload task files verbatim),
+        # then "none" — every task record still has an explicit source.
+        record["session_source"] = (
+            captured.get("source")
+            or record.get("session_source")
+            or SOURCE_NONE
+        )
         record.setdefault("task_id", record.get("worker_task_id"))
+        # P6 session-continuation lineage: the task record carries the
+        # parent session + the explicit reason (never silent continuity).
+        hint_getter = getattr(resolver, "hint_for", None)
+        if callable(hint_getter) and task_ref:
+            hint = hint_getter(task_ref)
+            if isinstance(hint, dict) and hint.get("kind") == "continuation":
+                record["parent_session_id"] = hint.get("parent_session_id")
+                record["continuation_reason"] = hint.get(
+                    "continuation_reason"
+                )
         return record
 
     def persist_stage(stage_result, resolver: Any) -> None:
@@ -644,26 +821,177 @@ async def execute_plan(
 
     def aggregate(stage_result, resolver: Any) -> None:
         for event in stage_result.failover_events:
-            _append_event(result.failover_events, event)
+            if _append_event(result.failover_events, event):
+                emit(
+                    "MODEL_FAILOVER",
+                    stage_id=stage_result.stage_id,
+                    session_id=_scalar(event.get("session_id")) if isinstance(event, dict) else None,
+                    role=_scalar(event.get("role")) if isinstance(event, dict) else None,
+                    reason=_clip(
+                        str(
+                            (event or {}).get("fallback_reason")
+                            if isinstance(event, dict)
+                            else ""
+                        ),
+                        160,
+                    ) or None,
+                )
         for session_id in stage_result.session_ids:
             if session_id and session_id not in result.session_ids:
                 result.session_ids.append(session_id)
         for task_result in stage_result.task_results:
-            task_id = task_result.get("worker_task_id")
+            task_id = (
+                task_result.get("worker_task_id")
+                or task_result.get("task_id")
+            )
             captured = _session_record(resolver, task_id) or {}
             session_id = task_result.get("session_id") or captured.get(
                 "session_id"
             )
             if task_id:
                 result.session_sources[task_id] = str(
-                    captured.get("source") or SOURCE_NONE
+                    captured.get("source")
+                    or task_result.get("session_source")
+                    or SOURCE_NONE
                 )
             if session_id and session_id not in result.session_ids:
                 result.session_ids.append(session_id)
 
+    # -- P6 resume carry-forward + first-class gate evidence -----------------
+
+    def carried_stage_result(stage_id: str) -> dict:
+        """
+        The persisted STAGE_ACCEPTED result — fail-closed: it must say
+        ``STAGE_ACCEPTED`` (plan.json aggregate or the stage file).
+        """
+        entry = ((persisted_plan or {}).get("stage_results") or {}).get(
+            stage_id
+        )
+        if isinstance(entry, dict) and entry.get("status") == STAGE_ACCEPTED:
+            return dict(entry)
+        view = stage_state_for(stage_id)
+        if view is None:
+            raise ValueError(
+                f"cannot carry stage {stage_id!r}: run_state is absent"
+            )
+        loaded = view.load_stage()
+        if loaded.get("status") != STAGE_ACCEPTED:
+            raise ValueError(
+                f"cannot carry stage {stage_id!r}: persisted verdict is "
+                f"{loaded.get('status')!r}, not STAGE_ACCEPTED"
+            )
+        return loaded
+
+    def carry_forward(stage_id: str, carried: dict) -> None:
+        """
+        Carry an accepted stage INTO the resumed result without
+        touching the executor: result entry verbatim + aggregates
+        (failover events, session ids, per-task sources).
+        """
+        entry = copy.deepcopy(dict(carried))
+        result.stage_results[stage_id] = entry
+        for event in entry.get("failover_events") or []:
+            _append_event(result.failover_events, event)
+        for session_id in entry.get("session_ids") or []:
+            if session_id and session_id not in result.session_ids:
+                result.session_ids.append(session_id)
+        for task_result in entry.get("task_results") or []:
+            task_id = (
+                task_result.get("worker_task_id")
+                or task_result.get("task_id")
+            )
+            source = task_result.get("session_source")
+            if task_id and source and task_id not in result.session_sources:
+                result.session_sources[task_id] = str(source)
+            session_id = task_result.get("session_id")
+            if session_id and session_id not in result.session_ids:
+                result.session_ids.append(session_id)
+
+    def write_stage_gate_record(stage, stage_result, resolver) -> None:
+        """Commit-gate evidence at the stage-commit gate point (§3)."""
+        if not stage_result.commit:
+            return  # only committed stages have immutable evidence
+        if commit_gate_writer is None and run_state is None:
+            return
+        from app.orchestration.agy_commitgate import (
+            build_commit_gate_record,
+            persist_commit_gate_record,
+        )
+
+        data = stage_result.to_dict()
+        data["task_results"] = [
+            task_record(task_result, resolver)
+            for task_result in stage_result.task_results
+        ]
+        record = build_commit_gate_record(plan, stage, data)
+        if commit_gate_writer is not None:
+            commit_gate_writer(record)
+        elif run_state is not None:
+            persist_commit_gate_record(run_state.plan_dir, record)
+
+    def _with_stage_task_files(data: dict) -> dict:
+        """Plan-record input: task results from the persisted files."""
+        if run_state is None:
+            return data
+        out = dict(data)
+        rebuilt: dict[str, Any] = {}
+        for stage_id, entry in (out.get("stage_results") or {}).items():
+            entry = dict(entry)
+            try:
+                file_tasks = StageRunState(
+                    run_state.root, plan.plan_id, stage_id
+                ).load_tasks()
+            except (OSError, ValueError):
+                file_tasks = []
+            if file_tasks:
+                entry["task_results"] = file_tasks
+            rebuilt[stage_id] = entry
+        out["stage_results"] = rebuilt
+        return out
+
+    def write_plan_gate_record(final_entry, cumulative_entry) -> None:
+        """Plan-level CommitGateRecord -> commits/plan-gate.json."""
+        if commit_gate_writer is None and run_state is None:
+            return
+        from app.orchestration.agy_commitgate import (
+            build_commit_gate_record,
+            persist_commit_gate_record,
+        )
+
+        data = result.to_dict()
+        data["final_acceptance"] = final_entry
+        data["cumulative"] = cumulative_entry
+        data = _with_stage_task_files(data)
+        record = build_commit_gate_record(plan, None, data, plan_level=True)
+        if commit_gate_writer is not None:
+            commit_gate_writer(record)
+        elif run_state is not None:
+            persist_commit_gate_record(run_state.plan_dir, record)
+
+    def record_stage_outcome(stage, stage_result, resolver) -> None:
+        """P6: stage gate events + commit-gate record (executed stages)."""
+        commit_sha = (stage_result.commit or {}).get("commit_sha")
+        if stage_result.commit:
+            emit(
+                "STAGE_COMMITTED",
+                stage_id=stage.stage_id,
+                sha=_scalar(commit_sha),
+            )
+        if stage_result.status == STAGE_ACCEPTED:
+            emit(
+                "STAGE_ACCEPTED",
+                stage_id=stage.stage_id,
+                status=STAGE_ACCEPTED,
+                sha=_scalar(commit_sha),
+            )
+        write_stage_gate_record(stage, stage_result, resolver)
+
     # -- one stage through the P3 path --------------------------------------
 
     async def run_one_stage(stage: PlanStage):
+        # P6: the stage run starts here (timeline-attached runs only).
+        emit("STAGE_STARTED", stage_id=stage.stage_id)
+
         executor = make_executor(plan, stage)
         if not isinstance(executor, (tuple, list)) or len(executor) != 4:
             length = len(executor) if hasattr(executor, "__len__") else "?"
@@ -682,12 +1010,57 @@ async def execute_plan(
         # (documented in the signature docstring).
         _ = executor_run_command
 
-        resolver = (
-            session_capturer
-            if session_capturer is not None
-            else getattr(execute_task, "session_log", None)
+        executor_log = getattr(execute_task, "session_log", None)
+        is_policy = (
+            session_capturer is not None
+            and getattr(session_capturer, "is_resume_session_policy", False)
         )
+        if is_policy:
+            resolver = _ResumeResolver(
+                session_capturer, executor_log, session_capturer
+            )
+        elif session_capturer is not None:
+            resolver = session_capturer
+        else:
+            resolver = executor_log
         bridge = _SessionBridge(resolver)
+
+        # P6 per-task events at the INJECTED seams: dispatch/verify
+        # ARE these callables, so a run killed mid-stage still shows
+        # DISPATCHED without COMPLETED — the stream never lies.
+        if timeline is not None:
+            original_execute = execute_task
+            original_validate = validate_task
+
+            async def traced_execute_task(task, attempt, repair_context):
+                emit(
+                    "TASK_DISPATCHED",
+                    stage_id=stage.stage_id,
+                    task_id=task.id,
+                    attempt=int(attempt),
+                )
+                output = await original_execute(
+                    task, attempt, repair_context
+                )
+                emit(
+                    "TASK_COMPLETED",
+                    stage_id=stage.stage_id,
+                    task_id=task.id,
+                )
+                return output
+
+            async def traced_validate_task(task):
+                ok, output = await original_validate(task)
+                emit(
+                    "TASK_VERIFIED",
+                    stage_id=stage.stage_id,
+                    task_id=task.id,
+                    status="ok" if ok else "failed",
+                )
+                return ok, output
+
+            execute_task = traced_execute_task
+            validate_task = traced_validate_task
 
         stage_result = await execute_stage(
             plan,
@@ -707,6 +1080,9 @@ async def execute_plan(
         aggregate(stage_result, resolver)
         persist_stage(stage_result, resolver)
         result.stage_results[stage.stage_id] = stage_result.to_dict()
+
+        # P6: gate events + the stage-commit CommitGateRecord.
+        record_stage_outcome(stage, stage_result, resolver)
 
         if on_stage is not None:
             await _maybe_await(on_stage(stage.stage_id, stage_result))
@@ -801,8 +1177,34 @@ async def execute_plan(
         result.plan_gate = decision
         result.plan_gate_reviews.append(decision)
         for event in gate_events.events:
-            _append_event(result.failover_events, event)
+            if _append_event(result.failover_events, event):
+                emit(
+                    "MODEL_FAILOVER",
+                    stage_id="plan",
+                    session_id=_scalar(
+                        event.get("session_id")
+                        if isinstance(event, dict)
+                        else None
+                    ),
+                    role=_scalar(
+                        event.get("role")
+                        if isinstance(event, dict)
+                        else None
+                    ),
+                    reason=_clip(
+                        str(
+                            (event or {}).get("fallback_reason")
+                            if isinstance(event, dict)
+                            else ""
+                        ),
+                        160,
+                    ) or None,
+                )
         persist_plan()
+
+        # P6: the plan-level CommitGateRecord at the plan gate point
+        # (the CONSTRAINED decision is the recorded input).
+        write_plan_gate_record(final_entry, cumulative_entry)
 
         return {
             "decision": decision,
@@ -832,6 +1234,13 @@ async def execute_plan(
             )
             result.repair_lineage.append(repair_id)
 
+            # P6: one event per actually-entered repair cycle.
+            emit(
+                "PLAN_REPAIR_REQUESTED",
+                stage_id=repair_id,
+                reason=_clip(str(repair_context.reason), 200),
+            )
+
             repair_result, _resolver = await run_one_stage(repair_stage)
 
             extra_failures: list[str] = []
@@ -860,7 +1269,44 @@ async def execute_plan(
                 plan, gate, decision, cumulative_commands
             )
 
+    # -- P6 resume seeding: re-ENTER the run, never restart it ---------------
+    if resume and persisted_plan:
+        # Reconstruct the aggregates persisted so far: failover
+        # events, bounded repair lineage (so max_plan_repairs keeps
+        # counting across the restart), session ids/sources and plan
+        # gate reviews. Accepted stage results are carried verbatim;
+        # non-accepted stage entries are simply overwritten when the
+        # stage re-runs.
+        result.created = persisted_plan.get("created") or result.created
+        result.failover_events = copy.deepcopy(
+            list(persisted_plan.get("failover_events") or [])
+        )
+        result.repair_lineage = list(
+            persisted_plan.get("repair_lineage") or []
+        )
+        result.session_ids = list(persisted_plan.get("session_ids") or [])
+        result.session_sources = dict(
+            persisted_plan.get("session_sources") or {}
+        )
+        result.plan_gate_reviews = copy.deepcopy(
+            list(persisted_plan.get("plan_gate_reviews") or [])
+        )
+        result.stage_results = copy.deepcopy(
+            dict(persisted_plan.get("stage_results") or {})
+        )
+        # stopped_at stays unset: this run is actively continuing.
+
     # -- 2: PLAN_IN_PROGRESS header BEFORE execution -------------------------
+    # P6: persist the ORIGINAL plan document at plan start (the exact
+    # plan a fresh process can reload from plan_doc.json).
+    if run_state is not None:
+        plan_doc_saver = getattr(run_state, "save_plan_doc", None)
+        if callable(plan_doc_saver):
+            plan_doc_saver(plan)
+    if not resume:
+        # A fresh run starts the timeline span; a resumed run already
+        # carries RUN_INTERRUPTED/RUN_RESUMED entries from before.
+        emit("PLAN_STARTED", status=PLAN_IN_PROGRESS)
 
     persist_plan()
 
@@ -872,7 +1318,57 @@ async def execute_plan(
         return result
 
     for stage in order:
-        stage_result, _resolver = await run_one_stage(stage)
+        boundary: str | None = None
+        if resume:
+            # P6: consult the persisted boundary before doing ANY work
+            # — an accepted stage must not even build an executor.
+            from app.orchestration.agy_resume import (
+                STAGE_COMMITTED as RECOVERY_STAGE_COMMITTED,
+                TASK_VERIFIED as RECOVERY_TASK_VERIFIED,
+                recovery_state,
+            )
+
+            state = recovery_state(stage.stage_id, run_state)
+            if state == STAGE_ACCEPTED:
+                carry_forward(
+                    stage.stage_id, carried_stage_result(stage.stage_id)
+                )
+                # NO executor, NO dispatch, NO commit, NO supervisor.
+                continue
+            if state in (RECOVERY_STAGE_COMMITTED, RECOVERY_TASK_VERIFIED):
+                boundary = state
+
+        if boundary is not None:
+            # Boundary re-entry: gates/supervisor ONLY (agy_resume).
+            from app.orchestration.agy_resume import (
+                run_stage_boundary_gate,
+            )
+
+            stage_result, resolver = await run_stage_boundary_gate(
+                plan,
+                stage,
+                boundary,
+                settings=settings,
+                run_state=run_state,
+                run_command=run_command,
+                cumulative_suite=cumulative_commands,
+                make_commit=make_commit,
+                supervisor_review=supervisor_review,
+                on_failover_event=on_failover_event,
+            )
+            aggregate(stage_result, resolver)
+            view = stage_state_for(stage.stage_id)
+            if view is not None:
+                view.save_stage(stage_result)
+                if stage_result.commit:
+                    view.save_commit(stage_result.commit)
+            result.stage_results[stage.stage_id] = stage_result.to_dict()
+            record_stage_outcome(stage, stage_result, resolver)
+            if on_stage is not None:
+                await _maybe_await(on_stage(stage.stage_id, stage_result))
+        else:
+            stage_result, resolver = await run_one_stage(stage)
+
         if stage_result.status != STAGE_ACCEPTED:
             result.stopped_at = stage.stage_id
             stopped_stage_result = stage_result
@@ -912,4 +1408,33 @@ async def execute_plan(
 
     result.updated = _now()
     persist_plan()
+
+    # -- P6 plan-end observability --------------------------------------------
+    terminal_state = result.status
+    last_commit_sha = None
+    if result.stage_order:
+        last_entry = result.stage_results.get(
+            result.stage_order[-1]
+        ) or {}
+        last_commit_sha = (last_entry.get("commit") or {}).get("commit_sha")
+    if terminal_state == PLAN_ACCEPTED:
+        emit(
+            "PLAN_ACCEPTED",
+            status=PLAN_ACCEPTED,
+            sha=_scalar(last_commit_sha),
+        )
+    elif terminal_state == PLAN_REJECTED:
+        emit("PLAN_REJECTED", status=PLAN_REJECTED)
+    if timeline is not None:
+        from app.orchestration.agy_timeline import write_observability
+        from pathlib import Path as _Path
+
+        obs_dir: Any = None
+        if run_state is not None:
+            obs_dir = run_state.plan_dir
+        elif getattr(timeline, "path", None) is not None:
+            obs_dir = _Path(timeline.path).parent
+        if obs_dir is not None:
+            write_observability(obs_dir, timeline)
+
     return result
