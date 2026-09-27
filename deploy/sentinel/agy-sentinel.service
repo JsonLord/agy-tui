@@ -1,0 +1,32 @@
+[Unit]
+Description=AGY process sentinel event runtime (local, event-driven)
+Documentation=https://hermes-agent.nousresearch.com/docs
+After=default.target
+# bounded restart rate
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/antigravity-worktrees/agy-event-runtime
+ExecStart=/usr/bin/python3 -m app.orchestration.sentinel daemon --state-root %h/.local/state/agy-sentinel
+Restart=on-failure
+RestartSec=3s
+# KillMode=process: only the daemon (main PID) is signalled on stop/restart so
+# monitored workers + their detached holders survive -> restart recovery can
+# re-verify PID + /proc start time on the SAME live processes (no respawn).
+KillMode=process
+TimeoutStopSec=20
+Environment=PYTHONUNBUFFERED=1
+Environment=SENTINEL_LOG_FILE=%h/.local/state/agy-sentinel/sentinel.log
+# journald capture of the daemon's stdout/stderr + explicit rotating log file
+# (opened by the daemon itself). No public port: the ONLY listener is a Unix
+# socket at <state-root>/sentinel.sock. No reverse-proxy or VPN-stack changes
+# are made by this unit.
+StandardOutput=journal
+StandardError=journal
+# NOTE: systemd USER service. If the user session's linger is off the service
+# dies at end of session — documented limitation; do NOT enable linger for it.
+
+[Install]
+WantedBy=default.target
