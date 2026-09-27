@@ -21,6 +21,19 @@ Kept thin — every effect is one explicit seam:
   full repo test suite. P3 uses this conservative full-suite selection
   by design; later milestones may pick a smaller relevant suite.
 
+P4 (session capture): the bare stdout extraction inside
+``execute_task`` is replaced by :func:`capture_session` — stdout
+first, then the already-known session, then a SERVER READ-BACK keyed
+by ``(agent, repo directory, since=stage-run start)``. The read-back
+is injectable (``session_read_back=``, default ``read_back_session``)
+so tests never touch the network, the capture SOURCE (``stdout`` /
+``known`` / ``readback`` / ``none``) is recorded per task in the
+executor's ``TaskSessionLog`` (``execute_task.session_log``) and
+forwarded to ``on_session`` binders that understand it. The
+same-session failover path (4 primary attempts, then one same-session
+run under the fallback agent) is UNCHANGED — only how an id is
+captured when the supervisor prints nothing differs.
+
 The ``opencode-supervise`` invocation itself is FACTORED behind an
 injectable callable (``run_supervised=`` in
 :func:`build_live_executor`, default ``run_agy_supervised``) so tests
@@ -35,13 +48,22 @@ are stateless.
 
 from __future__ import annotations
 
-import re
+import inspect
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Callable
 
 from app.config import AgySettings
 from app.integrations.external_stack import ExternalResult
+from app.orchestration.agy_session import (
+    SESSION_ANY_RE,
+    SESSION_LINE_RE,
+    TaskSessionLog,
+    capture_session,
+    extract_session_from_stdout,
+    read_back_session,
+)
 from app.orchestration.agy_supervisor import run_agy_supervised
 from app.orchestration.failover import (
     PRIMARY_MAX_ATTEMPTS,
@@ -60,23 +82,18 @@ COMMAND_TIMEOUT_SECONDS = 600
 
 # Session capture from opencode-supervise stdout: the supervisor
 # prints 'Session ID: ses_...'; the loose pattern keeps the same
-# semantics as external_stack's validate_session_id regex.
-_SESSION_LINE_RE = re.compile(
-    r"Session\s+ID\s*:\s*(ses_[A-Za-z0-9]+)",
-    re.IGNORECASE,
-)
-_SESSION_ANY_RE = re.compile(r"\b(ses_[A-Za-z0-9]+)\b")
+# semantics as external_stack's validate_session_id regex. The patterns
+# and the extractor are owned by agy_session (they must agree with the
+# read-back capture); the runtime name is kept for P3 callers.
+_SESSION_LINE_RE = SESSION_LINE_RE
+_SESSION_ANY_RE = SESSION_ANY_RE
 
 _COMMIT_EXCLUDED_PREFIXES = ("state/", ".serena/", "scratch/", ".git/")
 
 
 def extract_session_id(text: str | None) -> str | None:
     """First OpenCode session id in supervisor output, or None."""
-    if not text:
-        return None
-
-    match = _SESSION_LINE_RE.search(text) or _SESSION_ANY_RE.search(text)
-    return match.group(1) if match else None
+    return extract_session_from_stdout(text)
 
 
 def build_live_executor(
@@ -90,6 +107,7 @@ def build_live_executor(
     run_supervised: Callable[..., ExternalResult] | None = None,
     primary_agent: str = PRIMARY_DISPATCH_AGENT,
     fallback_agent: str = FALLBACK_DISPATCH_AGENT,
+    session_read_back: Callable[..., str | None] | None = read_back_session,
 ) -> tuple[
     Callable,
     Callable,
@@ -106,19 +124,82 @@ def build_live_executor(
 
     ``run_supervised`` defaults to ``run_agy_supervised`` and is the
     ONLY process-launching seam, so tests inject a fake there.
+
+    SESSION CAPTURE (P4): per supervised run the session id is resolved
+    through ``capture_session`` — supervisor stdout first, then the
+    session already known for this task, then the server read-back
+    (``agent``, this repo's directory, ``since_ms`` = the moment this
+    stage executor was built). ``session_read_back`` defaults to
+    ``read_back_session`` (the live read-back); tests inject a stub so
+    no test ever hits the network (pass an explicit no-op to disable).
+    Both the id and the source go to the executor's ``TaskSessionLog``
+    (``execute_task.session_log``) and to ``on_session`` — binders
+    that accept ``(task_id, session_id, source)`` receive the source,
+    plain two-argument binders (P3 ``SessionRecorder``) keep working
+    unchanged. The returned quadruple still has exactly four elements.
     """
     runner = run_supervised if run_supervised is not None else run_agy_supervised
     sessions: dict[str, str] = {}
+    session_log = TaskSessionLog()
+    directory = str(repo)
+    # Stage-run start: read-back only accepts sessions updated at/after
+    # this epoch-ms, so this run can only ever capture ITS OWN session.
+    stage_started_ms = int(time.time() * 1000)
 
-    def _note_session(task_id: str, session_id: str | None) -> None:
+    def _binder_takes_source() -> bool:
+        """Does on_session.bind accept the P4 (task, session, source)?"""
+        binder = getattr(on_session, "bind", None)
+        if not callable(binder):
+            return False
+        try:
+            parameters = inspect.signature(binder).parameters
+        except (TypeError, ValueError):  # builtins / uninspectable
+            return False
+        if any(
+            p.kind is inspect.Parameter.VAR_KEYWORD
+            for p in parameters.values()
+        ):
+            return True
+        return len(parameters) >= 3
+
+    bind_takes_source = _binder_takes_source()
+
+    def _note_session(
+        task_id: str,
+        session_id: str | None,
+        source: str = "known",
+    ) -> None:
         if not session_id:
             return
         sessions[task_id] = session_id
+        session_log.record(task_id, session_id, source)
         binder = getattr(on_session, "bind", None)
         if callable(binder):
-            binder(task_id, session_id)
+            if bind_takes_source:
+                binder(task_id, session_id, source)
+            else:
+                binder(task_id, session_id)
         elif on_session is not None:
             on_session(session_id)
+
+    def _capture(
+        task_id: str,
+        *,
+        stdout: str | None,
+        known_session: str | None,
+        agent: str,
+    ) -> str | None:
+        session_id, _source = capture_session(
+            stdout,
+            known_session=known_session,
+            agent=agent,
+            directory=directory,
+            since_ms=stage_started_ms,
+            read_back=session_read_back,
+        )
+        if session_id:
+            _note_session(task_id, session_id, _source)
+        return session_id
 
     def _report_failover(event: dict) -> None:
         if on_failover_event is not None:
@@ -150,8 +231,12 @@ def build_live_executor(
                 session=session,
             )
 
-            captured = extract_session_id(result.stdout) or session
-            _note_session(task.id, captured)
+            captured = _capture(
+                task.id,
+                stdout=result.stdout,
+                known_session=session,
+                agent=agent,
+            )
             session = captured
 
             failure_text = (result.stderr or "").strip() or (
@@ -186,10 +271,13 @@ def build_live_executor(
                 agent=fallback_agent,
                 session=session,
             )
-            fallback_captured = (
-                extract_session_id(fallback_result.stdout) or session
+            fallback_captured = _capture(
+                task.id,
+                stdout=fallback_result.stdout,
+                known_session=session,
+                agent=fallback_agent,
             )
-            _note_session(task.id, fallback_captured)
+            session = fallback_captured
 
             _report_failover(
                 build_failover_event(
@@ -283,6 +371,10 @@ def build_live_executor(
                 ordered.append(path)
 
         return ordered
+
+    # P4 read-back seam: the plan driver recovers each task's
+    # (session_id, source) evidence from here (default capturer).
+    setattr(execute_task, "session_log", session_log)
 
     return execute_task, validate_task, collect_changed_files, run_command
 

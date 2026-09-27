@@ -859,6 +859,11 @@ class TestRuntimeFailoverLayer(unittest.TestCase):
                 on_session=recorder,
                 on_failover_event=events,
                 run_supervised=runner,
+                # P4: keep the P3 suite network-free. This fake's
+                # stdout sometimes carries NO session id (NON_TRANSIENT
+                # case), which would otherwise trigger the live server
+                # read-back seam in build_live_executor.
+                session_read_back=lambda **_kwargs: None,
             )
         )
         task = decompose_stage(stage, objective=plan_obj.objective)[0]
