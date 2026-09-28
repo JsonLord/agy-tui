@@ -82,6 +82,10 @@ class AnalystUnavailable(RuntimeError):
     """The read-only analyst could not produce parseable evidence."""
 
 
+class AnalystOutputInvalid(AnalystUnavailable):
+    """The analyst's transcript contained no valid evidence object."""
+
+
 class RepoMutationDetected(RuntimeError):
     """The analyst run changed the repository — hard rule violation."""
 
@@ -133,17 +137,45 @@ over guesses.
 # evidence extraction / coercion (bounded)
 # ---------------------------------------------------------------------------
 
+def _candidate_is_evidence(candidate: dict) -> bool:
+    """Schema check: the candidate satisfies AnalysisEvidence (authoritative).
+
+    Parses as JSON is NOT enough — required fields (e.g. ``summary``) decide.
+    """
+    validator = getattr(AnalysisEvidence, "model_validate", None)
+    if validator is not None:
+        try:
+            validator(candidate)
+            return True
+        except Exception:  # noqa: BLE001 - any validation failure = not evidence
+            return False
+    # dataclass fallback (mid-flight import seam): required summary, list[str]s
+    if not isinstance(candidate.get("summary"), str) or not candidate.get("summary"):
+        return False
+    return all(
+        isinstance(candidate.get(name, []), list) for name in _EVIDENCE_LIST_FIELDS
+    )
+
+
 def _extract_json_object(text: str) -> dict | None:
-    """Best-effort: first balanced JSON object in the text, or None."""
+    """Schema-aware extraction: latest balanced JSON object that validates.
+
+    The analyst transcript interleaves tool arguments, tool results and
+    intermediate JSON BEFORE the final evidence object, so the first-object
+    grab is wrong. Candidates are scanned END -> BEGINNING and the first
+    (i.e. latest-in-text) one that validates as ``AnalysisEvidence`` wins.
+    Returns None when no candidate validates (caller fails closed).
+    """
     if not text:
         return None
     # fast path: whole text is JSON
     try:
         data = json.loads(text)
-        if isinstance(data, dict):
+        if isinstance(data, dict) and _candidate_is_evidence(data):
             return data
     except json.JSONDecodeError:
         pass
+    candidates: list[dict] = []
     start = text.find("{")
     while start != -1:
         depth = 0
@@ -168,12 +200,14 @@ def _extract_json_object(text: str) -> dict | None:
                 if depth == 0:
                     try:
                         data = json.loads(text[start : idx + 1])
-                        if isinstance(data, dict):
-                            return data
+                        if isinstance(data, dict) and _candidate_is_evidence(data):
+                            candidates.append(data)
                     except json.JSONDecodeError:
-                        break
+                        pass
+                    break
         start = text.find("{", start + 1)
-    return None
+    # END -> BEGINNING: last valid candidate in text order is the answer
+    return candidates[-1] if candidates else None
 
 
 def _bounded_items(values: Any) -> list[str]:
@@ -274,7 +308,9 @@ def default_analyst(
     runtime uses; lifecycle values sized for a bounded read-only
     investigation). The session id is resolved through the P4
     ``capture_session`` order (stdout -> read-back). Raises
-    ``AnalystUnavailable`` on nonzero exit, timeout, or unparseable
+    ``AnalystUnavailable`` (or its subclass ``AnalystOutputInvalid``, when
+    the transcript parsed but held no valid evidence object) on nonzero
+    exit, timeout, or unparseable
     evidence — never fabricates an empty success.
     """
     dispatch = run_dispatch
@@ -288,7 +324,7 @@ def default_analyst(
                 repo_,
                 prompt_,
                 agent=agent,
-                repeat_limit=0,
+                repeat_limit=3,
                 stall_seconds=120,
                 max_restarts=0,
                 timeout=timeout,
@@ -332,8 +368,9 @@ def default_analyst(
 
     payload = _extract_json_object(stdout)
     if payload is None:
-        raise AnalystUnavailable(
-            "analyst returned no parseable evidence JSON object"
+        raise AnalystOutputInvalid(
+            "analyst transcript contained no valid evidence object; "
+            f"stdout[:200]={stdout[:200]!r}"
         )
 
     return evidence_from_payload(payload)
