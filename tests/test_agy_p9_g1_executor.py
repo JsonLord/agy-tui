@@ -277,6 +277,63 @@ def test_test_author_escaping_test_paths_rejects_gate():
     )
 
 
+def test_tooling_artifacts_do_not_trigger_author_guard():
+    """Live-discovered (P9 smoke): running ANY OpenCode agent in a fresh
+    repo materializes Serena/Graphify/bytecode dirs as a side effect. The
+    author guard must ignore these while still seeing real test files."""
+    executor = build_executor(
+        repo_snapshots=[
+            {"app/refunds.py": "h1"},
+            {
+                "app/refunds.py": "h1",
+                "tests/test_refund_window.py": "h1",
+                "__pycache__/refunds.cpython-313.pyc": "pyc",
+                ".serena/project.yml": "serena",
+                "graphify-out/graph.json": "graph",
+            },
+        ],
+    )
+    record = executor.execute_g1(make_checkpoint(), plan_id="plan-1")
+    assert record.changed_files == ["tests/test_refund_window.py"]
+    assert record.supervisor_decision == "ACCEPT"
+    # the guard's detail must not name the artifact dirs
+    guard = [c for c in record.deterministic_checks if c["name"] == "author_guard"]
+    assert guard and "serena" not in guard[0]["detail"].lower()
+
+
+def test_tooling_artifacts_do_not_mask_a_real_escape():
+    """Artifacts are filtered, but a REAL production-file change alongside
+    them must still be rejected."""
+    _expect_rejected_failure(
+        lambda cp, ex: ex.execute_g1(cp, plan_id="plan-1"),
+        g1x.TestAuthorEscapedTestPaths,
+        repo_snapshots=[
+            {"app/refunds.py": "h1"},
+            {
+                "app/refunds.py": "CHANGED",  # real escape, next to artifacts
+                "tests/test_refund_window.py": "h1",
+                "__pycache__/x.pyc": "pyc",
+                ".serena/project.yml": "serena",
+            },
+        ],
+    )
+
+
+def test_is_tooling_artifact_only_matches_top_level():
+    from app.orchestration.checkpoint_planning.g1_executor import (
+        _is_tooling_artifact,
+    )
+
+    assert _is_tooling_artifact("__pycache__/x.pyc")
+    assert _is_tooling_artifact(".serena/project.yml")
+    assert _is_tooling_artifact("./graphify-out/graph.json")
+    # a file merely NAMED like an artifact dir under a real source tree is
+    # NOT filtered — real content still counts
+    assert not _is_tooling_artifact("app/__pycache__/x.pyc")
+    assert not _is_tooling_artifact("tests/test_refund_window.py")
+    assert not _is_tooling_artifact("my__pycache__.py")
+
+
 def test_red_not_demonstrated_rejects_gate():
     _expect_rejected_failure(
         lambda cp, ex: ex.execute_g1(cp, plan_id="plan-1"),

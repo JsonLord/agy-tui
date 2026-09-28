@@ -58,6 +58,20 @@ G1_GATE_ID = "G1_behavior"
 ROLE_TEST_AUTHOR = "TEST_AUTHOR"
 ROLE_IMPLEMENTER = "IMPLEMENTER"
 
+#: Untracked, tooling-generated path prefixes that are NOT worker output.
+#: OpenCode/Serena/Graphify/python materialize these directories as a side
+#: effect of running ANY agent in a fresh repo (Serena project init,
+#: Graphify graph, bytecode caches). The author guard must not treat their
+#: appearance as an escape; it still catches every real source file.
+TOOLING_ARTIFACT_PREFIXES = (
+    "__pycache__",
+    ".serena",
+    "graphify-out",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+)
+
 AGENT_FOR_ROLE = {
     ROLE_TEST_AUTHOR: "agy-test-author",
     ROLE_IMPLEMENTER: "agy-dispatch",
@@ -232,6 +246,25 @@ def _under_test_path(path: str, test_path: str) -> bool:
     if not prefix:
         return False
     return normalized == prefix or normalized.startswith(prefix + "/")
+
+
+def _is_tooling_artifact(path: str) -> bool:
+    """Top-level tooling-generated path (NOT worker output).
+
+    Only a path whose FIRST segment is a known artifact dir qualifies —
+    ``app/__pycache__/x.pyc`` is still reported (a real file under app/
+    would be too), while ``__pycache__/mathutil.cpython-313.pyc`` at the
+    repo root is bytecode noise.
+    """
+    normalized = str(path).replace("\\", "/").strip()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    top = normalized.split("/", 1)[0].rstrip("/")
+    return top in TOOLING_ARTIFACT_PREFIXES
+
+
+def _non_artifact_paths(paths) -> list[str]:
+    return sorted(p for p in paths if not _is_tooling_artifact(p))
 
 
 def _tail(text: str, limit: int = 1500) -> str:
@@ -714,6 +747,7 @@ class G1Executor:
         )
 
         # -- 3. AUTHOR GUARD ------------------------------------------------------
+        author_changed = _non_artifact_paths(author_changed)
         escaped = sorted(
             p for p in author_changed if not _under_test_path(p, self.config.test_path)
         )
