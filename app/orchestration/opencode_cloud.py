@@ -209,6 +209,9 @@ async def run_opencode_cloud_task(
             run_supervised,
             repo,
             execution_brief,
+            # LEGACY pre-P3 cloud-coding path; explicit gemma-local
+            # preserves prior behavior until a deliberate role migration.
+            agent="gemma-local",
             cloud_led=True,
         )
 
@@ -499,6 +502,9 @@ async def resume_opencode_cloud_task(
             run_supervised,
             repo,
             resume_brief,
+            # LEGACY pre-P3 cloud-coding path; explicit gemma-local
+            # preserves prior behavior until a deliberate role migration.
+            agent="gemma-local",
             cloud_led=True,
             timeout=150,
         )

@@ -748,6 +748,9 @@ When Git/GitHub preparation is complete, stop.
         supervised = run_supervised(
             root,
             brief,
+            # LEGACY pre-P3 preparation path; explicit gemma-local
+            # preserves prior behavior until a deliberate role migration.
+            agent="gemma-local",
             # The preparation brief is already complete.
             # Disable the separate Nemotron preflight
             # planner; keep Nemotron recovery active.

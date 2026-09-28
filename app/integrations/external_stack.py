@@ -219,7 +219,7 @@ def run_supervised(
     repo: str | Path,
     task: str,
     *,
-    agent: str = "gemma-local",
+    agent: str,
     repeat_limit: int = 3,
     stall_seconds: int = 120,
     max_restarts: int = 1,
@@ -231,6 +231,10 @@ def run_supervised(
     Execute a coding task through the existing isolated
     opencode-supervise stack.
 
+    AGY call sites must name their intended OpenCode agent explicitly
+    via ``agent``; there is no implicit default. An empty or
+    whitespace-only agent is rejected before any side effect.
+
     OpenCode, Graphify, Serena, Headroom, Gemma, and Nemotron
     stay in their own existing environments.
 
@@ -238,6 +242,11 @@ def run_supervised(
     disabled because the cloud model already supplied the initial plan.
     Nemotron remains active for recovery/escalation.
     """
+    if not isinstance(agent, str) or not agent.strip():
+        raise ValueError(
+            "agent must be a non-empty OpenCode agent name"
+        )
+
     repo = Path(repo).expanduser().resolve()
 
     if not repo.is_dir():
