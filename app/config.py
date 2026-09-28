@@ -1,3 +1,4 @@
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,7 +51,7 @@ class Settings:
 # Tool routing is optional and served by Needle3; all values stay
 # model-neutral and provider-neutral elsewhere in the code.
 
-DEFAULT_HELMHOLTZ_BASE_URL = "http://100.98.105.55:5173/v1"
+DEFAULT_HELMHOLTZ_BASE_URL = "https://api.helmholtz-blablador.fz-juelich.de/v1"
 DEFAULT_NEEDLE_BASE_URL = "https://leon4gr45-needle.hf.space"
 DEFAULT_SUPERVISOR_MODEL = "alias-mimo-v2.6-pro"
 DEFAULT_DISPATCH_MODEL = "alias-mimo-v2.6-flash"
@@ -73,6 +74,64 @@ ENV_NEEDLE_ROUTING_ENABLED = "NEEDLE_ROUTING_ENABLED"
 ENV_SUPERVISOR_STALL_SECONDS = "SUPERVISOR_STALL_SECONDS"
 ENV_SUPERVISOR_REPEAT_LIMIT = "SUPERVISOR_REPEAT_LIMIT"
 ENV_SUPERVISOR_MAX_RESTARTS = "SUPERVISOR_MAX_RESTARTS"
+
+
+ENV_OPENCODE_CONFIG_PATH = "OPENCODE_CONFIG_PATH"
+DEFAULT_OPENCODE_CONFIG_PATH = (
+    Path.home() / ".config" / "opencode" / "opencode.jsonc"
+)
+
+
+def opencode_helmholtz_config(
+    path: Path | None = None,
+) -> dict | None:
+    """
+    Read the Helmholtz provider block from the OpenCode config.
+
+    Returns ``{"base_url": str, "api_key": str}`` (only keys that
+    are present as non-empty strings) or ``None`` when the file is
+    missing, unparseable, or has no usable helmholtz block. This is
+    the same credential source the AGY OpenCode runtime agents use,
+    so no secret is duplicated in tracked code. The api key value is
+    never printed or logged here.
+    """
+    if path is None:
+        raw = os.environ.get(ENV_OPENCODE_CONFIG_PATH, "").strip()
+        path = Path(raw) if raw else DEFAULT_OPENCODE_CONFIG_PATH
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    provider = data.get("provider")
+    if not isinstance(provider, dict):
+        return None
+
+    helmholtz = provider.get("helmholtz")
+    if not isinstance(helmholtz, dict):
+        return None
+
+    result: dict = {}
+
+    options = helmholtz.get("options")
+    base_url = (
+        options.get("baseURL")
+        if isinstance(options, dict)
+        else None
+    ) or helmholtz.get("baseURL")
+
+    if isinstance(base_url, str) and base_url.strip():
+        result["base_url"] = base_url.strip()
+
+    api_key = helmholtz.get("apiKey")
+    if isinstance(api_key, str) and api_key.strip():
+        result["api_key"] = api_key.strip()
+
+    return result or None
 
 
 def _resolve_env(
@@ -241,9 +300,15 @@ class AgySettings:
     ) -> "AgySettings":
         env = _resolve_env(env)
 
+        # Provider fallback source: the OpenCode helmholtz config
+        # block (same credentials the runtime agents already use).
+        # Missing/unusable file simply yields None -> defaults below.
+        opencode_cfg = opencode_helmholtz_config() or {}
+
         return cls(
             provider_base_url=(
                 env.get(ENV_PROVIDER_BASE_URL, "").strip()
+                or opencode_cfg.get("base_url")
                 or DEFAULT_HELMHOLTZ_BASE_URL
             ),
             supervisor_model=(
@@ -255,7 +320,9 @@ class AgySettings:
                 or DEFAULT_DISPATCH_MODEL
             ),
             provider_api_key=(
-                env.get(ENV_PROVIDER_API_KEY, "").strip() or None
+                env.get(ENV_PROVIDER_API_KEY, "").strip()
+                or opencode_cfg.get("api_key")
+                or None
             ),
             lifecycle=SupervisorLifecycle.from_env(env),
             needle=NeedleSettings.from_env(env),

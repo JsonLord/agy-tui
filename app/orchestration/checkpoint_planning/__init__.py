@@ -92,6 +92,32 @@ from app.orchestration.checkpoint_planning.g1_executor import (  # noqa: F401
     TestFileTampered,
     build_implementation_evidence,
 )
+from app.orchestration.checkpoint_planning.g2_executor import (  # noqa: F401
+    G2_GATE_ID,
+    ROLE_UI_REVIEWER,
+    GateConfig2,
+    G2Executor,
+    MiMoProG2Gatekeeper,
+    UIReviewUnavailable,
+    UIReviewerFailed,
+    UIReviewerEscapedReadonly,
+    build_live_g2_executor,
+)
+from app.orchestration.checkpoint_planning.g3_executor import (  # noqa: F401
+    G3_GATE_ID,
+    ROLE_ADVERSARIAL_REVIEWER,
+    ROLE_FIXER,
+    G3Executor,
+    MiMoProG3Gatekeeper,
+    AdversarialReviewUnavailable,
+    FixerEscapedScope,
+    ReviewerMutatedRepo,
+    MAX_FIX_CYCLES,
+    sort_findings,
+    parse_review_document,
+    build_live_g3_executor,
+    default_gatekeeper_config,
+)
 
 __all__ = [
     # B surface
@@ -160,4 +186,27 @@ __all__ = [
     "GatekeeperContextUnavailable",
     "MiMoProGatekeeper",
     "build_implementation_evidence",
+    # P10 gate runtime
+    "G2_GATE_ID",
+    "ROLE_UI_REVIEWER",
+    "GateConfig2",
+    "G2Executor",
+    "MiMoProG2Gatekeeper",
+    "UIReviewUnavailable",
+    "UIReviewerFailed",
+    "UIReviewerEscapedReadonly",
+    "build_live_g2_executor",
+    "G3_GATE_ID",
+    "ROLE_ADVERSARIAL_REVIEWER",
+    "ROLE_FIXER",
+    "G3Executor",
+    "MiMoProG3Gatekeeper",
+    "AdversarialReviewUnavailable",
+    "FixerEscapedScope",
+    "ReviewerMutatedRepo",
+    "MAX_FIX_CYCLES",
+    "sort_findings",
+    "parse_review_document",
+    "build_live_g3_executor",
+    "default_gatekeeper_config",
 ]
