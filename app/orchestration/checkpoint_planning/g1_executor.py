@@ -169,7 +169,13 @@ class GatekeeperDecision:
 
 def _default_test_path_snapshot(repo: Path) -> dict[str, str]:
     """Content hash of every tracked-looking file under the repo's test
-    trees (``tests/`` and ``test_*.py`` at any level)."""
+    trees (``tests/`` and ``test_*.py`` at any level).
+
+    Derived artifacts are excluded (bytecode caches, ``.pyc``/``.pyo``):
+    running the test suite — which a worker legitimately does — rewrites
+    bytecode and must NOT read as a test-file change to the implement
+    guard. A change to a ``.py`` test source is always caught.
+    """
     import hashlib
 
     snapshot: dict[str, str] = {}
@@ -181,11 +187,13 @@ def _default_test_path_snapshot(repo: Path) -> dict[str, str]:
             continue
         rel = path.relative_to(root)
         parts = rel.parts
-        if parts and (parts[0] == "tests" or ".git" in parts):
+        if ".git" in parts or "__pycache__" in parts:
+            continue
+        if path.suffix in (".pyc", ".pyo"):
+            continue
+        if parts and (parts[0] == "tests"):
             pass
         elif not (parts and parts[-1].startswith("test_") and parts[-1].endswith(".py")):
-            continue
-        if ".git" in parts:
             continue
         try:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()

@@ -681,3 +681,118 @@ def test_mimo_gatekeeper_prompt_is_compact_structured_json():
     assert "G1_behavior" in user_prompt
     assert "cp-1" in user_prompt
     assert captured["payload"]["response_format"] == {"type": "json_object"}
+
+
+# ---------------------------------------------------------------------------
+# Live-discovered (P9 smoke #2): running the suite rewrites
+# tests/__pycache__/*.pyc; the implement guard compares the TEST-PATH
+# snapshot, so bytecode must not read as a test-file change.
+# ---------------------------------------------------------------------------
+
+
+def test_default_test_path_snapshot_ignores_bytecode(tmp_path):
+    from app.orchestration.checkpoint_planning.g1_executor import (
+        _default_test_path_snapshot,
+    )
+
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_a.py").write_text("x = 1\n")
+    (tests / "__pycache__").mkdir()
+    (tests / "__pycache__" / "test_a.cpython-313.pyc").write_bytes(b"pyc1")
+    (tmp_path / "test_top.py").write_text("y = 2\n")
+    (tmp_path / "test_top.pyc").write_bytes(b"pyc2")
+    (tmp_path / "top_test.py").write_text("w = 0  # not a test by convention\n")
+    (tmp_path / "prod.py").write_text("z = 3\n")
+
+    snap = _default_test_path_snapshot(tmp_path)
+    assert set(snap) == {"tests/test_a.py", "test_top.py"}
+
+    # a test run rewriting bytecode does NOT change the snapshot...
+    (tests / "__pycache__" / "test_a.cpython-313.pyc").write_bytes(b"pyc1-rewritten")
+    (tests / "__pycache__" / "test_a.cpython-313-pytest-9.1.1.pyc").write_bytes(b"new")
+    assert _default_test_path_snapshot(tmp_path) == snap
+    # ...but a change to the test SOURCE is still caught
+    (tests / "test_a.py").write_text("x = 1  # tampered\n")
+    assert _default_test_path_snapshot(tmp_path) != snap
+
+
+def test_implement_guard_allows_bytecode_but_catches_source_tamper(tmp_path):
+    """End-to-end through the executor with the REAL default test snapshot:
+    the implementer runs the suite (bytecode appears) -> guard passes;
+    a source edit of the frozen test -> TestFileTampered."""
+    from app.orchestration.checkpoint_planning.g1_executor import (
+        G1Executor,
+        TestFileTampered,
+    )
+    from tests.test_agy_p9_g1_executor import (
+        ScriptedGatekeeper,
+        make_checkpoint,
+    )
+
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "test_frozen.py").write_text("t = 1\n")
+    (repo / "prod.py").write_text("v = 0\n")
+
+    frozen = (
+        repo / "tests" / "__pycache__"
+    )
+    frozen.mkdir()
+
+    def worker(role, prompt, _repo):
+        # implementer "runs the tests": bytecode appears/rewrites, and in
+        # the tamper case also edits the frozen test source
+        (frozen / "test_frozen.cpython-313.pyc").write_bytes(
+            b"bytecode-" + role.encode()
+        )
+        if role == "IMPLEMENTER":
+            (repo / "prod.py").write_text("v = 1  # implemented\n")
+            if executor_mode["tamper"]:
+                (repo / "tests" / "test_frozen.py").write_text("t = 1  # gutted\n")
+        return type("R", (), {"ok": True, "output": "Session ID: ses-x"})()
+
+    run_calls = {"n": 0}
+
+    def run_test(_cmd, _cwd):
+        run_calls["n"] += 1
+        return (1, "FAIL", "") if run_calls["n"] == 1 else (0, "ok", "")
+
+    from app.orchestration.checkpoint_planning.g1_executor import (
+        _default_test_path_snapshot,
+    )
+
+    executor_mode = {"tamper": False}
+    cp = make_checkpoint()
+    ex = G1Executor(
+        repo,
+        test_path="tests",
+        test_command=["python3", "-m", "unittest"],
+        dispatch_worker=worker,
+        run_test=run_test,
+        gatekeeper=ScriptedGatekeeper(["ACCEPT"]),
+        test_path_snapshot=_default_test_path_snapshot,
+    )
+    rec = ex.execute_g1(cp, plan_id="p-1")  # bytecode rewrite must NOT trip the guard
+    assert rec.supervisor_decision == "ACCEPT"
+
+    # now the same run with a real test-source edit -> must be rejected
+    executor_mode["tamper"] = True
+    run_calls["n"] = 0
+    (repo / "prod.py").write_text("v = 0\n")
+    (frozen / "test_frozen.cpython-313.pyc").unlink()
+    cp2 = make_checkpoint()
+    ex2 = G1Executor(
+        repo,
+        test_path="tests",
+        test_command=["python3", "-m", "unittest"],
+        dispatch_worker=worker,
+        run_test=run_test,
+        gatekeeper=ScriptedGatekeeper(["ACCEPT"]),
+        test_path_snapshot=_default_test_path_snapshot,
+    )
+    try:
+        ex2.execute_g1(cp2, plan_id="p-1")
+        assert False, "expected TestFileTampered"
+    except TestFileTampered as e:
+        assert "tests/test_frozen.py" in str(e)
