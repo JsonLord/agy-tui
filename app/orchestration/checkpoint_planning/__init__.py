@@ -68,6 +68,28 @@ from app.orchestration.checkpoint_planning.submission import (  # noqa: F401
 from app.orchestration.checkpoint_planning.provenance import (  # noqa: F401
     plan_provenance_record,
 )
+from app.orchestration.checkpoint_planning.gate_engine import (  # noqa: F401
+    GateEngine,
+    GateTransitionError,
+)
+from app.orchestration.checkpoint_planning.gate_evidence import (  # noqa: F401
+    GateExecutionRecord,
+    evidence_is_sufficient,
+    g1_evidence_is_sufficient,
+)
+from app.orchestration.checkpoint_planning.g1_executor import (  # noqa: F401
+    CumulativeRegression,
+    G1Executor,
+    GateConfig,
+    GateRuntimeError,
+    GatekeeperDecision,
+    GatekeeperUnavailable,
+    GreenNotAchieved,
+    MiMoProGatekeeper,
+    RedNotDemonstrated,
+    TestAuthorEscapedTestPaths,
+    TestFileTampered,
+)
 
 __all__ = [
     # B surface
@@ -117,4 +139,21 @@ __all__ = [
     "SubmissionResult",
     "submit_checkpoint_plan",
     "plan_provenance_record",
+    # P9 gate runtime
+    "GateEngine",
+    "GateTransitionError",
+    "GateExecutionRecord",
+    "g1_evidence_is_sufficient",
+    "evidence_is_sufficient",
+    "G1Executor",
+    "GateConfig",
+    "GatekeeperDecision",
+    "GateRuntimeError",
+    "TestAuthorEscapedTestPaths",
+    "TestFileTampered",
+    "RedNotDemonstrated",
+    "GreenNotAchieved",
+    "CumulativeRegression",
+    "GatekeeperUnavailable",
+    "MiMoProGatekeeper",
 ]
