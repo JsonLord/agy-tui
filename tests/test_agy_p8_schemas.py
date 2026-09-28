@@ -118,7 +118,8 @@ class SchemaTests(unittest.TestCase):
     def test_enums_exact(self):
         self.assertEqual(
             [s.value for s in GateStatus],
-            ["PENDING", "ACTIVE", "PASSED", "REPAIR", "REJECTED"],
+            ["PENDING", "ACTIVE", "PASSED", "REPAIR", "REJECTED",
+             "WAITING_FOR_HUMAN"],
         )
         self.assertEqual(
             [s.value for s in CheckpointStatus],

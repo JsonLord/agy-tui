@@ -68,6 +68,25 @@ class GateStatus(str, Enum):
     PASSED = "PASSED"
     REPAIR = "REPAIR"
     REJECTED = "REJECTED"
+    # P11/G4: the gate is parked awaiting a REAL human decision. Only the
+    # human-gate (G4_human) may ever hold this status, and only
+    # ``GateEngine.submit_human_decision`` may resolve it. Appended last
+    # so every previously-serialized GateStatus value keeps its meaning.
+    WAITING_FOR_HUMAN = "WAITING_FOR_HUMAN"
+
+
+class HumanDecision(str, Enum):
+    """The three (and only three) decisions a human may make at G4.
+
+    * APPROVE       -> G4 PASSED (the ONLY path to PASSED for G4)
+    * NEEDS_CHANGES -> G4 REPAIR; the verbatim feedback becomes a
+      ``HumanPlannerInputRequest`` for the planner (never a worker prompt)
+    * CANCEL        -> G4 REJECTED (terminal, deterministic)
+    """
+
+    APPROVE = "APPROVE"
+    NEEDS_CHANGES = "NEEDS_CHANGES"
+    CANCEL = "CANCEL"
 
 
 class CheckpointStatus(str, Enum):
@@ -167,6 +186,86 @@ class GateRecord(BaseModel):
                 f"applicability must be one of {APPLICABILITY_VALUES}, got {value!r}"
             )
         return value
+
+
+# ---------------------------------------------------------------------------
+# P11 — human authority records (G4)
+# ---------------------------------------------------------------------------
+
+
+class HumanGateRecord(BaseModel):
+    """One durable human decision at the G4 gate (P11).
+
+    ``feedback`` is VERBATIM human text. It may be empty for
+    APPROVE/CANCEL; the schemas-level validator refuses an empty
+    feedback on NEEDS_CHANGES (fail closed — a change request without
+    the change is not actionable).
+    """
+
+    plan_id: str
+    checkpoint_id: str
+    gate_id: str
+    decision: HumanDecision
+    feedback: str = ""
+    submitted_at: str
+    actor: str
+    provenance: str = "cli"
+    revision: int = 1
+
+    @field_validator("revision")
+    @classmethod
+    def _revision_positive(cls, value: int) -> int:
+        if not isinstance(value, int) or value < 1:
+            raise ValueError("HumanGateRecord.revision must be >= 1")
+        return value
+
+    @field_validator("submitted_at")
+    @classmethod
+    def _submitted_at_nonempty(cls, value: str) -> str:
+        if not (value or "").strip():
+            raise ValueError("HumanGateRecord.submitted_at is required (ISO-8601 UTC)")
+        return value
+
+    @model_validator(mode="after")
+    def _feedback_required_for_needs_changes(self):
+        if self.decision == HumanDecision.NEEDS_CHANGES and not self.feedback.strip():
+            raise ValueError(
+                "HumanGateRecord.feedback is mandatory for NEEDS_CHANGES "
+                "(fail closed: changes without the change cannot be routed)"
+            )
+        return self
+
+
+class HumanPlannerInputRequest(BaseModel):
+    """How human feedback becomes planner input (P11).
+
+    Human text NEVER goes directly into a worker prompt; only the
+    planner interprets it and turns it into new/bounded-repair
+    checkpoints through the normal gates. P11 only CREATES the request
+    (status ``PENDING``); consumption is planner-side work later.
+    """
+
+    request_id: str
+    plan_id: str
+    checkpoint_id: str
+    gate_id: str
+    feedback: str
+    decision: HumanDecision
+    created_at: str
+    status: str = "PENDING"
+
+    @model_validator(mode="after")
+    def _feedback_nonempty(self):
+        if not self.feedback.strip():
+            raise ValueError(
+                "HumanPlannerInputRequest.feedback must carry the verbatim "
+                "human text (never an empty request)"
+            )
+        if self.decision != HumanDecision.NEEDS_CHANGES:
+            raise ValueError(
+                "HumanPlannerInputRequest is only created for NEEDS_CHANGES"
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------
