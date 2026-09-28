@@ -853,3 +853,240 @@ def test_session_capturer_never_raises_and_never_invents():
         g1x.ROLE_TEST_AUTHOR, _WorkerOut("Session ID: not-a-session-format"), 5
     )
     assert (sid, source) == (None, "none")  # bare non-ses_ text is ignored, no id invented
+
+
+# ---------------------------------------------------------------------------
+# P9.2 — bounded implementation-diff evidence + NEEDS_CONTEXT
+# ---------------------------------------------------------------------------
+
+
+def _minimal_record_dict(**overrides):
+    """Full REQUIRED-field dict for GateExecutionRecord (schema-strict)."""
+    doc = {
+        "plan_id": "plan-1",
+        "checkpoint_id": "cp-1",
+        "gate_id": "G1_behavior",
+        "attempt": 1,
+        "requirements": {},
+        "worker_sessions": [],
+        "changed_files": ["app/x.py"],
+        "deterministic_checks": [],
+        "red_evidence": None,
+        "green_evidence": None,
+        "cumulative_gate": None,
+        "implementation_evidence": None,
+        "supervisor_session_id": None,
+        "supervisor_decision": None,
+        "repair_lineage": [],
+        "timestamps": {},
+    }
+    doc.update(overrides)
+    return doc
+
+
+def test_record_round_trips_implementation_evidence_dict_and_none():
+    ev = {
+        "git_stat": " app/x.py | 2 ++\n",
+        "product_diff": "diff --git a/app/x.py b/app/x.py\n+x = 1",
+        "test_files": ["tests/test_x.py"],
+        "changed_symbols": ["do_x"],
+        "truncated": False,
+    }
+    rec = GateExecutionRecord(**_minimal_record_dict(implementation_evidence=ev))
+    assert rec.to_dict()["implementation_evidence"] == ev
+    assert GateExecutionRecord.from_dict(rec.to_dict()).implementation_evidence == ev
+
+    none_rec = GateExecutionRecord(**_minimal_record_dict())
+    assert none_rec.implementation_evidence is None
+    loaded = GateExecutionRecord.from_dict(none_rec.to_dict())
+    assert loaded.implementation_evidence is None
+    # to_dict ALWAYS emits the key (strict round-trip for new records)
+    assert "implementation_evidence" in none_rec.to_dict()
+
+
+def test_record_from_dict_backward_compat_missing_evidence_key_loads_as_none():
+    """Live P9 records persisted at base 0dd5567 have no
+    implementation_evidence key — the ONE deliberate relaxation keeps
+    them loadable (treated as None)."""
+    doc = _minimal_record_dict()
+    del doc["implementation_evidence"]
+    rec = GateExecutionRecord.from_dict(doc)
+    assert rec.implementation_evidence is None
+    # every OTHER missing key still raises (strictness preserved)
+    broken = _minimal_record_dict()
+    del broken["green_evidence"]
+    with pytest.raises(ValueError, match="green_evidence"):
+        GateExecutionRecord.from_dict(broken)
+
+
+def test_record_from_dict_still_rejects_unknown_extra_keys():
+    doc = _minimal_record_dict(not_a_field="boom")
+    with pytest.raises(ValueError, match="not_a_field"):
+        GateExecutionRecord.from_dict(doc)
+
+
+def test_record_accepts_needs_context_supervisor_decision():
+    rec = GateExecutionRecord(
+        **_minimal_record_dict(supervisor_decision="NEEDS_CONTEXT")
+    )
+    assert rec.supervisor_decision == "NEEDS_CONTEXT"
+    assert rec.is_passed() is False
+    assert g1_evidence_is_sufficient(rec) is False
+    assert GateExecutionRecord.from_dict(rec.to_dict()).supervisor_decision == (
+        "NEEDS_CONTEXT"
+    )
+    with pytest.raises(ValueError):
+        GateExecutionRecord(**_minimal_record_dict(supervisor_decision="MAYBE"))
+
+
+def test_build_prompt_includes_implementation_evidence():
+    keeper = MiMoProGatekeeper(
+        base_url="https://example.invalid/v1", model="m",
+        http=lambda *a: (200, _envelope('{"decision":"ACCEPT","reason":"r"}')),
+    )
+    evidence = GateExecutionRecord(
+        **{
+            **_evidence_for_gatekeeper().to_dict(),
+            "implementation_evidence": {
+                "git_stat": " app/refunds.py | 4 ++++\n",
+                "product_diff": "MARKER_P92_DIFF diff --git a/app/refunds.py",
+                "test_files": ["tests/test_x.py"],
+                "changed_symbols": ["RefundPolicy"],
+                "truncated": False,
+            },
+        }
+    )
+    prompt = keeper._build_prompt(evidence, [])
+    assert "implementation_evidence" in prompt
+    assert "MARKER_P92_DIFF" in prompt
+    assert "RefundPolicy" in prompt
+
+
+def test_mimo_gatekeeper_needs_context_parses_with_context_request():
+    def http(url, headers, payload, timeout):
+        return 200, _envelope(
+            '{"decision": "NEEDS_CONTEXT", "reason": "diff too thin", '
+            '"repair_instructions": "", "context_request": '
+            '"app/refunds.py:symbol check_window"}'
+        )
+
+    keeper = MiMoProGatekeeper(
+        base_url="https://example.invalid/v1", model="m", http=http
+    )
+    decision = keeper.decide(_evidence_for_gatekeeper(), [])
+    assert decision.decision == "NEEDS_CONTEXT"
+    assert decision.context_request == "app/refunds.py:symbol check_window"
+
+
+def test_mimo_gatekeeper_needs_context_without_request_fails_closed():
+    def http(url, headers, payload, timeout):
+        return 200, _envelope('{"decision": "NEEDS_CONTEXT", "reason": "r"}')
+
+    keeper = MiMoProGatekeeper(
+        base_url="https://example.invalid/v1", model="m", http=http
+    )
+    with pytest.raises(GatekeeperUnavailable):
+        keeper.decide(_evidence_for_gatekeeper(), [])
+
+
+def _repo_with_product_file(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "app").mkdir(parents=True)
+    (repo / "app" / "refunds.py").write_text(
+        "class RefundPolicy:\n"
+        "    def check_window(self, days):\n"
+        "        return days <= 30\n"
+        "\n"
+        "    def unused_helper(self):\n"
+        "        return 1\n"
+    )
+    return repo
+
+
+def _needs_context(request):
+    return GatekeeperDecision(
+        decision="NEEDS_CONTEXT", reason="need the source", context_request=request
+    )
+
+
+def test_executor_needs_context_then_accept_proves_one_slice_flow(tmp_path):
+    """Fake gatekeeper: NEEDS_CONTEXT -> slice provided -> ACCEPT. Final
+    record ACCEPT, context_slice recorded, gate PASSED."""
+    repo = _repo_with_product_file(tmp_path)
+    checkpoint = make_checkpoint()
+    gatekeeper = ScriptedGatekeeper(
+        [_needs_context("app/refunds.py:full"), "ACCEPT"]
+    )
+    executor = build_executor(repo=str(repo), gatekeeper=gatekeeper)
+
+    rec = executor.execute_g1(checkpoint, plan_id="plan-1")
+
+    assert status_of(checkpoint) == GateStatus.PASSED
+    assert rec.supervisor_decision == "ACCEPT"
+    slice_ = rec.implementation_evidence["context_slice"]
+    assert slice_["request"] == "app/refunds.py:full"
+    assert "class RefundPolicy" in slice_["content"]
+    assert slice_["truncated"] is False
+    # the re-review saw the slice; only ONE extra decide() happened
+    assert len(gatekeeper.seen) == 2
+    assert gatekeeper.seen[1].implementation_evidence["context_slice"]["request"] == (
+        "app/refunds.py:full"
+    )
+
+
+def test_executor_needs_context_symbol_slice(tmp_path):
+    repo = _repo_with_product_file(tmp_path)
+    gatekeeper = ScriptedGatekeeper(
+        [_needs_context("app/refunds.py:symbol check_window"), "ACCEPT"]
+    )
+    executor = build_executor(repo=str(repo), gatekeeper=gatekeeper)
+    rec = executor.execute_g1(make_checkpoint(), plan_id="plan-1")
+    content = rec.implementation_evidence["context_slice"]["content"]
+    assert "def check_window" in content
+    assert "unused_helper" not in content  # block ends at the next def
+
+
+def test_executor_needs_context_twice_fails_closed_to_rejected(tmp_path):
+    repo = _repo_with_product_file(tmp_path)
+    checkpoint = make_checkpoint()
+    gatekeeper = ScriptedGatekeeper(
+        [
+            _needs_context("app/refunds.py:full"),
+            _needs_context("app/refunds.py:symbol missing_symbol"),
+        ]
+    )
+    executor = build_executor(repo=str(repo), gatekeeper=gatekeeper)
+
+    with pytest.raises(g1x.GatekeeperContextUnavailable):
+        executor.execute_g1(checkpoint, plan_id="plan-1")
+
+    assert status_of(checkpoint) == GateStatus.REJECTED
+    assert len(gatekeeper.seen) == 2  # exactly one slice re-review
+    terminal = executor.emitted_records[-1]
+    assert terminal.supervisor_decision == "NEEDS_CONTEXT"
+    failed = [c for c in terminal.deterministic_checks
+              if c["name"] == "context_request"]
+    assert failed and failed[0]["ok"] is False
+    assert g1_evidence_is_sufficient(terminal) is False
+
+
+def test_executor_needs_context_escaping_path_fails_closed_without_reading(tmp_path):
+    """`../x.py` escapes the repo — no slice is read, no re-review, the
+    gate REJECTs fail-closed with a terminal NEEDS_CONTEXT record."""
+    repo = _repo_with_product_file(tmp_path)
+    (tmp_path / "secret.py").write_text("SECRET = 1\n")
+    checkpoint = make_checkpoint()
+    gatekeeper = ScriptedGatekeeper([_needs_context("../secret.py:full")])
+    executor = build_executor(repo=str(repo), gatekeeper=gatekeeper)
+
+    with pytest.raises(g1x.GatekeeperContextUnavailable):
+        executor.execute_g1(checkpoint, plan_id="plan-1")
+
+    assert status_of(checkpoint) == GateStatus.REJECTED
+    assert len(gatekeeper.seen) == 1  # invalid request -> NO second decide()
+    terminal = executor.emitted_records[-1]
+    assert terminal.supervisor_decision == "NEEDS_CONTEXT"
+    assert "SECRET" not in json.dumps(terminal.to_dict(), default=str)
+    failed = [c for c in terminal.deterministic_checks
+              if c["name"] == "context_request"]
+    assert failed and failed[0]["ok"] is False

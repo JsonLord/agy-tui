@@ -32,13 +32,23 @@ RECORD_FIELDS = (
     "red_evidence",
     "green_evidence",
     "cumulative_gate",
+    "implementation_evidence",
     "supervisor_session_id",
     "supervisor_decision",
     "repair_lineage",
     "timestamps",
 )
 
-SUPERVISOR_DECISIONS = (None, "ACCEPT", "REPAIR", "REJECT")
+# P9.2: NEEDS_CONTEXT is persistable ONLY as the terminal decision written
+# by the executor's fail-closed path (the gate REJECTs — a record ending in
+# NEEDS_CONTEXT is never a pass and never a pending review).
+SUPERVISOR_DECISIONS = (None, "ACCEPT", "REPAIR", "REJECT", "NEEDS_CONTEXT")
+
+#: Fields ``from_dict`` accepts as absent (treated as the field default).
+#: The ONE deliberate schema relaxation: P9.2's ``implementation_evidence``
+#: must not break live records persisted before it existed (base 0dd5567).
+#: Every other missing key still raises.
+OPTIONAL_IN_INPUT_FIELDS = frozenset({"implementation_evidence"})
 
 
 @dataclass(frozen=True)
@@ -56,6 +66,7 @@ class GateExecutionRecord:
     red_evidence: dict | None = None
     green_evidence: dict | None = None
     cumulative_gate: dict | None = None
+    implementation_evidence: dict | None = None
     supervisor_session_id: str | None = None
     supervisor_decision: str | None = None
     repair_lineage: list = field(default_factory=list)
@@ -106,6 +117,11 @@ class GateExecutionRecord:
                 if self.cumulative_gate is not None
                 else None
             ),
+            "implementation_evidence": (
+                dict(self.implementation_evidence)
+                if self.implementation_evidence is not None
+                else None
+            ),
             "supervisor_session_id": self.supervisor_session_id,
             "supervisor_decision": self.supervisor_decision,
             "repair_lineage": list(self.repair_lineage),
@@ -118,6 +134,10 @@ class GateExecutionRecord:
 
         Strict: an unexpected key OR a missing key raises ``ValueError``
         naming the key — corrupt evidence is never silently repaired.
+        The one deliberate relaxation (P9.2): a key in
+        ``OPTIONAL_IN_INPUT_FIELDS`` may be absent (treated as its
+        default) so records persisted before ``implementation_evidence``
+        existed stay loadable; ``to_dict`` ALWAYS emits it.
         """
         if not isinstance(data, dict):
             raise ValueError(
@@ -127,7 +147,7 @@ class GateExecutionRecord:
         keys = set(data.keys())
         expected = set(RECORD_FIELDS)
         extra = sorted(keys - expected)
-        missing = sorted(expected - keys)
+        missing = sorted(expected - keys - OPTIONAL_IN_INPUT_FIELDS)
         if extra:
             raise ValueError(
                 "gate execution record has unexpected field(s): "
@@ -141,8 +161,8 @@ class GateExecutionRecord:
         if not isinstance(data["attempt"], int) or isinstance(data["attempt"], bool):
             raise ValueError("attempt must be an int")
         for key in ("requirements", "cumulative_gate", "red_evidence",
-                    "green_evidence", "timestamps"):
-            value = data[key]
+                    "green_evidence", "implementation_evidence", "timestamps"):
+            value = data.get(key)
             if value is not None and not isinstance(value, dict):
                 raise ValueError(f"{key} must be a dict or None")
         for key in ("worker_sessions", "changed_files",
@@ -178,6 +198,11 @@ class GateExecutionRecord:
             cumulative_gate=(
                 dict(data["cumulative_gate"])
                 if data["cumulative_gate"] is not None
+                else None
+            ),
+            implementation_evidence=(
+                dict(data["implementation_evidence"])
+                if data.get("implementation_evidence") is not None
                 else None
             ),
             supervisor_session_id=session_id,

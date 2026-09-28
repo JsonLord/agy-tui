@@ -82,6 +82,7 @@ from app.orchestration.checkpoint_planning.g1_executor import (  # noqa: F401
     G1Executor,
     GateConfig,
     GateRuntimeError,
+    GatekeeperContextUnavailable,
     GatekeeperDecision,
     GatekeeperUnavailable,
     GreenNotAchieved,
@@ -89,6 +90,7 @@ from app.orchestration.checkpoint_planning.g1_executor import (  # noqa: F401
     RedNotDemonstrated,
     TestAuthorEscapedTestPaths,
     TestFileTampered,
+    build_implementation_evidence,
 )
 
 __all__ = [
@@ -155,5 +157,7 @@ __all__ = [
     "GreenNotAchieved",
     "CumulativeRegression",
     "GatekeeperUnavailable",
+    "GatekeeperContextUnavailable",
     "MiMoProGatekeeper",
+    "build_implementation_evidence",
 ]

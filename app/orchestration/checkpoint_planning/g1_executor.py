@@ -41,6 +41,7 @@ Design rules encoded here:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -128,6 +129,16 @@ class GatekeeperUnavailable(RuntimeError):
     """
 
 
+class GatekeeperContextUnavailable(GateRuntimeError):
+    """P9.2: the gatekeeper asked for more context (NEEDS_CONTEXT) and the
+    bounded one-slice flow could not satisfy it — the request was invalid,
+    escaped the repo, the symbol was missing, or Pro asked again.
+
+    Fail-closed: the gate is REJECTED with a terminal NEEDS_CONTEXT record
+    — NEVER silently passed, never left ACTIVE.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Configuration + gatekeeper contract
 # ---------------------------------------------------------------------------
@@ -162,10 +173,14 @@ class G1Gatekeeper(Protocol):
 
 @dataclass
 class GatekeeperDecision:
-    decision: str  # "ACCEPT" | "REPAIR" | "REJECT"
+    decision: str  # "ACCEPT" | "REPAIR" | "REJECT" | "NEEDS_CONTEXT"
     reason: str
     repair_instructions: str = ""
     session_id: str | None = None
+    #: P9.2: used ONLY with NEEDS_CONTEXT — exactly ONE bounded slice:
+    #: ``<path>:full`` or ``<path>:symbol <name>``. Empty is invalid
+    #: (the MiMo parser fails closed on it).
+    context_request: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -293,16 +308,132 @@ def _utc_iso(clock_value: float | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# P9.2 — bounded implementation-diff evidence
+# ---------------------------------------------------------------------------
+
+_DIFF_TRUNCATION_MARKER = "…[diff truncated: {n} more bytes]…"
+
+
+def _git_diff_run(repo: Path, args: list[str]) -> str:
+    """Best-effort git invocation for evidence building. A missing repo,
+    missing git, or non-zero exit yields empty text — evidence assembly
+    must never crash the gate path, and an un-buildable diff simply means
+    the reviewer sees no diff (it can ACCEPT nothing on it)."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return ""
+    return proc.stdout or ""
+
+
+def _is_tracked(repo: Path, path: str) -> bool:
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", path],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return False
+    return proc.returncode == 0
+
+
+def build_implementation_evidence(
+    repo: Path | str,
+    changed_files: list[str],
+    *,
+    max_bytes: int = 12000,
+    max_lines: int = 400,
+    test_path: str,
+) -> dict:
+    """Bounded, deterministic implementation evidence for the gatekeeper.
+
+    Shows WHAT the code does (diff + symbols), never the whole repo:
+    ``git_stat`` (diffstat vs HEAD), a capped unified ``product_diff`` of
+    the non-test changed files (tracked modifications via ``git diff``,
+    new untracked files via ``git diff --no-index /dev/null <f>``), the
+    frozen test files LISTED (they are the contract, never diffed), and
+    the heuristic top-level ``changed_symbols`` of the diffed files.
+
+    The line cap is applied first (keep the first ``max_lines`` lines in
+    file order), then the byte cap on the joined text with an explicit
+    truncation marker. No network. Empty/absent repo state yields all
+    empty fields with ``truncated=False``.
+    """
+    repo = Path(repo)
+    changed = sorted({str(p) for p in (changed_files or [])})
+    product_files = [
+        p for p in changed
+        if not _under_test_path(p, test_path) and not _is_tooling_artifact(p)
+    ]
+    test_files = [p for p in changed if _under_test_path(p, test_path)]
+
+    git_stat = _git_diff_run(repo, ["diff", "--stat", "HEAD"])
+
+    diff_lines: list[str] = []
+    symbols: set[str] = set()
+    for path in product_files:
+        if _is_tracked(repo, path):
+            chunk = _git_diff_run(repo, ["diff", "--", path])
+        else:
+            chunk = _git_diff_run(repo, ["diff", "--no-index", "/dev/null", path])
+        if chunk:
+            diff_lines.extend(chunk.splitlines())
+        # heuristic symbols: top-level def/class names in the product file
+        try:
+            text = (repo / path).read_text(errors="replace")
+        except (OSError, ValueError):
+            text = ""
+        for m in re.finditer(r"^(?:def|class)[ \t]+([A-Za-z_]\w*)", text, re.MULTILINE):
+            symbols.add(m.group(1))
+
+    truncated = False
+    if len(diff_lines) > max_lines:
+        diff_lines = diff_lines[:max_lines]
+        truncated = True
+    product_diff = "\n".join(diff_lines)
+    raw = product_diff.encode("utf-8")
+    if len(raw) > max_bytes:
+        product_diff = raw[:max_bytes].decode("utf-8", "ignore")
+        product_diff += _DIFF_TRUNCATION_MARKER.format(n=len(raw) - max_bytes)
+        truncated = True
+
+    return {
+        "git_stat": git_stat,
+        "product_diff": product_diff,
+        "test_files": test_files,
+        "changed_symbols": sorted(symbols),
+        "truncated": truncated,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Default live gatekeeper (MiMo Pro over the Helmholtz endpoint)
 # ---------------------------------------------------------------------------
 
 GATEKEEPER_ROLE_RULES = (
     "You are the AGY G1 Behavior/TDD gatekeeper. You review STRUCTURED "
     "evidence only. Reply with ONLY a JSON object: "
-    '{"decision": "ACCEPT|REPAIR|REJECT", "reason": str, '
-    '"repair_instructions": str}. ACCEPT only if the evidence proves RED '
-    'before GREEN, GREEN after implementation, a passing cumulative suite, '
-    "and all deterministic guards ok. Never invent facts."
+    '{"decision": "ACCEPT|REPAIR|REJECT|NEEDS_CONTEXT", "reason": str, '
+    '"repair_instructions": str, "context_request": str}. ACCEPT only if '
+    "the evidence proves RED before GREEN, GREEN after implementation, a "
+    "passing cumulative suite, and all deterministic guards ok. Judge "
+    "behavior correctness from the requirements, the tests, and the "
+    "implementation_evidence (git_stat + bounded product_diff) — NEVER "
+    "from test outputs alone: passing tests can still hide a logically "
+    "wrong implementation. ACCEPT requires the diff to be consistent with "
+    "the requirements. context_request is used ONLY with NEEDS_CONTEXT and "
+    "must name exactly ONE bounded slice: a file path as '<path>:full' or "
+    "a symbol as '<path>:symbol <name>'. Never request the whole repo. "
+    "Never invent facts."
 )
 
 
@@ -395,8 +526,14 @@ class MiMoProGatekeeper:
             text = envelope["choices"][0]["message"]["content"]
             parsed = _extract_json_object(text)
             decision = str(parsed["decision"]).strip().upper()
-            if decision not in ("ACCEPT", "REPAIR", "REJECT"):
+            if decision not in ("ACCEPT", "REPAIR", "REJECT", "NEEDS_CONTEXT"):
                 raise ValueError(f"invalid decision {decision!r}")
+            context_request = str(parsed.get("context_request") or "")
+            if decision == "NEEDS_CONTEXT" and not context_request.strip():
+                # fail closed: never guess what Pro wanted to see
+                raise ValueError(
+                    "NEEDS_CONTEXT without a context_request is invalid"
+                )
         except Exception as exc:  # noqa: BLE001 - fail closed, never guess
             raise GatekeeperUnavailable(
                 f"gatekeeper response unparseable: {exc}"
@@ -407,6 +544,7 @@ class MiMoProGatekeeper:
             reason=str(parsed.get("reason") or ""),
             repair_instructions=str(parsed.get("repair_instructions") or ""),
             session_id=str(session_id) if session_id else None,
+            context_request=context_request,
         )
 
     # -- internals ---------------------------------------------------------
@@ -438,6 +576,9 @@ class MiMoProGatekeeper:
             "red_evidence": self._compact_run(doc["red_evidence"]),
             "green_evidence": self._compact_run(doc["green_evidence"]),
             "cumulative_gate": self._compact_run(doc["cumulative_gate"]),
+            "implementation_evidence": self._compact_evidence(
+                doc["implementation_evidence"]
+            ),
             "prior_repairs": [
                 {
                     "attempt": r.attempt,
@@ -459,6 +600,25 @@ class MiMoProGatekeeper:
             "stdout_tail": _tail(run.get("stdout_tail") or run.get("stdout") or ""),
             "stderr_tail": _tail(run.get("stderr_tail") or run.get("stderr") or ""),
         }
+
+    @staticmethod
+    def _compact_evidence(evidence: dict | None) -> dict | None:
+        """implementation_evidence is already bounded at construction
+        (build_implementation_evidence); defensively tail every string
+        value at 4000 chars in case a caller supplied something fatter."""
+        if not isinstance(evidence, dict):
+            return None
+
+        def _bound(value):
+            if isinstance(value, str):
+                return _tail(value, 4000)
+            if isinstance(value, dict):
+                return {k: _bound(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_bound(v) for v in value]
+            return value
+
+        return {k: _bound(v) for k, v in evidence.items()}
 
     @staticmethod
     def _urllib_http(
@@ -663,6 +823,88 @@ class G1Executor:
             "gatekeeper or an explicit gatekeeper_config (fail closed — a "
             "gate is never silently skipped)"
         )
+
+    # -- P9.2: bounded context slices (NEEDS_CONTEXT) --------------------------
+
+    def _resolve_context_slice(self, request: str) -> tuple[str, bool]:
+        """Resolve ONE ``context_request`` to bounded content.
+
+        Grammar: ``<path>:full`` or ``<path>:symbol <name>``. The path is
+        always repo-relative — an absolute path, a drive spec, or any ``..``
+        segment that escapes the repo root is refused (fail closed). The
+        slice is capped at 8000 chars. Raises ``GateRuntimeError`` for an
+        invalid, escaping, missing, or symbol-less request — the caller
+        turns that into the terminal NEEDS_CONTEXT rejection.
+        """
+        req = str(request or "").strip()
+        if ":" not in req:
+            raise GateRuntimeError(f"context_request is not a bounded slice: {req!r}")
+        raw_path, _, selector = req.partition(":")
+        selector = selector.strip()
+        raw_path = raw_path.strip().replace("\\", "/")
+        if not raw_path or not selector:
+            raise GateRuntimeError(f"context_request is malformed: {req!r}")
+        if (
+            raw_path.startswith("/")
+            or re.match(r"^[A-Za-z]:", raw_path)
+            or ".." in Path(raw_path).parts
+        ):
+            raise GateRuntimeError(
+                f"context_request escapes the repo (absolute or '..'): {req!r}"
+            )
+        root = Path(self.config.repo).resolve()
+        target = (root / raw_path).resolve()
+        if root not in target.parents and target != root:
+            raise GateRuntimeError(f"context_request escapes the repo: {req!r}")
+        if not target.is_file():
+            raise GateRuntimeError(f"context_request names no file: {req!r}")
+
+        kind, _, name = selector.partition(" ")
+        kind = kind.strip().lower()
+        name = name.strip()
+        try:
+            text = target.read_text(errors="replace")
+        except OSError as exc:
+            raise GateRuntimeError(f"context file is unreadable: {exc}") from exc
+
+        if kind == "full":
+            block = text
+        elif kind == "symbol":
+            if not name:
+                raise GateRuntimeError(
+                    f"symbol context_request names no symbol: {req!r}"
+                )
+            block = self._extract_symbol_block(text, name, req)
+        else:
+            raise GateRuntimeError(
+                "context_request selector must be 'full' or 'symbol <name>'"
+                f": {req!r}"
+            )
+        truncated = len(block) > 8000
+        return (block[:8000] if truncated else block), truncated
+
+    @staticmethod
+    def _extract_symbol_block(text: str, name: str, req: str) -> str:
+        """def/class ``name`` block: the definition line through the next
+        same-indent top-level statement (shallower-or-equal indent ends it;
+        deeper-indented lines belong to the block)."""
+        pattern = re.compile(
+            rf"^(?P<indent>[ \t]*)(?:def|class)[ \t]+{re.escape(name)}\b",
+            re.MULTILINE,
+        )
+        match = pattern.search(text)
+        if match is None:
+            raise GateRuntimeError(f"context_request symbol not found: {req!r}")
+        indent = match.group("indent")
+        lines = text[match.start():].splitlines(keepends=True)
+        block = [lines[0]]
+        for line in lines[1:]:
+            if line.strip():
+                depth = len(line) - len(line.lstrip())
+                if depth <= len(indent):
+                    break  # next same-indent top-level statement ends the block
+            block.append(line)
+        return "".join(block)
 
     # -- evidence plumbing ------------------------------------------------------
 
@@ -990,6 +1232,14 @@ class G1Executor:
                 {"name": "cumulative", "ok": True,
                  "detail": f"full suite exit 0 (attempt {attempt})"},
             ]
+            attempt_changed = sorted(
+                set(base["changed_files"]) | set(tampered)
+            )
+            impl_evidence = build_implementation_evidence(
+                self.config.repo,
+                attempt_changed,
+                test_path=self.config.test_path,
+            )
             record = GateExecutionRecord(
                 plan_id=plan_id,
                 checkpoint_id=checkpoint.checkpoint_id,
@@ -997,9 +1247,7 @@ class G1Executor:
                 attempt=attempt,
                 requirements=requirements,
                 worker_sessions=list(base["worker_sessions"]) + sessions,
-                changed_files=sorted(
-                    set(base["changed_files"]) | set(tampered)
-                ),
+                changed_files=attempt_changed,
                 deterministic_checks=attempt_checks,
                 red_evidence=base["red_evidence"],
                 green_evidence={
@@ -1014,6 +1262,7 @@ class G1Executor:
                     "stdout_tail": _tail(cum_out),
                     "stderr_tail": _tail(cum_err),
                 },
+                implementation_evidence=impl_evidence,
                 supervisor_session_id=None,
                 supervisor_decision=None,
                 repair_lineage=list(base["repair_lineage"]),
@@ -1023,6 +1272,69 @@ class G1Executor:
             # Fail-closed: if decide() raises, nothing is written and the
             # exception propagates — the gate stays ACTIVE, resumable.
             decision = gatekeeper.decide(record, list(prior_repairs))
+
+            # -- 9b. NEEDS_CONTEXT: ONE bounded slice per attempt (P9.2) ----
+            if decision.decision == "NEEDS_CONTEXT":
+                slice_err: str | None = None
+                try:
+                    content, slice_truncated = self._resolve_context_slice(
+                        decision.context_request
+                    )
+                except GateRuntimeError as exc:
+                    content, slice_truncated, slice_err = "", False, str(exc)
+                if slice_err is None:
+                    record = GateExecutionRecord(
+                        **{
+                            **record.to_dict(),
+                            "implementation_evidence": {
+                                **impl_evidence,
+                                "context_slice": {
+                                    "request": decision.context_request,
+                                    "content": content,
+                                    "truncated": slice_truncated,
+                                },
+                            },
+                        }
+                    )
+                    # exactly one re-review; its decision is final
+                    decision = gatekeeper.decide(record, list(prior_repairs))
+                if decision.decision == "NEEDS_CONTEXT":
+                    # fail closed: slice unresolvable, or Pro wants more
+                    # than the one slice we are allowed to give.
+                    detail = slice_err or (
+                        "gatekeeper still needs context after the single "
+                        f"bounded slice {decision.context_request!r}"
+                        if decision.context_request else
+                        "gatekeeper returned NEEDS_CONTEXT without a "
+                        "resolvable context_request"
+                    )
+                    terminal_checks = attempt_checks + [
+                        {
+                            "name": "context_request",
+                            "ok": False,
+                            "detail": _tail(
+                                f"context request failed closed: {detail}", 800
+                            ),
+                        }
+                    ]
+                    terminal = GateExecutionRecord(
+                        **{
+                            **record.to_dict(),
+                            "deterministic_checks": terminal_checks,
+                            "supervisor_decision": "NEEDS_CONTEXT",
+                            "supervisor_session_id": decision.session_id,
+                        }
+                    )
+                    self._emit(terminal)
+                    self._advance(
+                        engine, checkpoint, G1_GATE_ID,
+                        GateStatus.REJECTED, actor="gatekeeper",
+                    )
+                    raise GatekeeperContextUnavailable(
+                        f"{G1_GATE_ID}: NEEDS_CONTEXT could not be satisfied "
+                        f"with one bounded slice — gate REJECTED (fail "
+                        f"closed): {detail}"
+                    )
 
             stamped = GateExecutionRecord(
                 **{
