@@ -1090,3 +1090,160 @@ def test_executor_needs_context_escaping_path_fails_closed_without_reading(tmp_p
     failed = [c for c in terminal.deterministic_checks
               if c["name"] == "context_request"]
     assert failed and failed[0]["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# P9.2 defect fix: implementer product-file changes must reach the record.
+# Live smoke at 2fec17d: git_stat showed mathutil.py modified, yet the
+# record's changed_files was test-only and product_diff was EMPTY — the
+# gatekeeper ACCEPTed an implementation change it could not see.
+# Rig: real throwaway git repo in tmp_path (so build_implementation_evidence
+# runs real `git diff`), scripted dict repo_snapshots stepped in lockstep
+# with the fake workers' ACTUAL file writes, fake run_test (RED then GREEN).
+# ---------------------------------------------------------------------------
+
+
+PRODUCT_BASE = "def one():\n    return 1\n"
+PRODUCT_IMPL = "def one():\n    return 1\n\n\ndef multiply(a, b):\n    return a * b\n"
+AUTHORED_TEST = "def test_multiply():\n    assert multiply(2, 3) == 6\n"
+
+
+def _init_product_repo(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "__init__.py").write_text("")
+    (repo / "mathutil.py").write_text(PRODUCT_BASE)
+    import subprocess
+
+    def git(*args):
+        subprocess.run(
+            ["git", *args], cwd=str(repo), capture_output=True, text=True,
+            check=True,
+        )
+
+    git("init", "-q")
+    git("config", "user.email", "agy-test@localhost")
+    git("config", "user.name", "AGY Test")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    return repo
+
+
+def _g1_executor_with_worker(repo, on_author, on_implementer, snapshots,
+                             gatekeeper=None):
+    queue = list(snapshots)
+    tail = snapshots[-1]
+
+    def repo_snapshot(_r):
+        return queue.pop(0) if queue else dict(tail)
+
+    def dispatch_worker(role, _prompt, _cwd):
+        if role == "TEST_AUTHOR":
+            on_author()
+        elif role == "IMPLEMENTER":
+            on_implementer()
+        return FakeWorkerResult()
+
+    calls = {"n": 0}
+
+    def run_test(_cmd, _cwd):
+        calls["n"] += 1
+        return (1, "FAIL: test_multiply", "") if calls["n"] == 1 else (0, "ok", "")
+
+    return G1Executor(
+        repo,
+        test_path="tests",
+        test_command=["pytest", "-q"],
+        full_suite_command=["pytest", "-q", "tests/"],
+        run_test=run_test,
+        dispatch_worker=dispatch_worker,
+        gatekeeper=gatekeeper or ScriptedGatekeeper(["ACCEPT"]),
+        session_capturer=lambda role, result, since_ms: (f"sess-{role}", "stdout"),
+        clock=lambda: 1_760_000_000.0,
+        # frozen test view: identical on every call -> no tamper signal
+        test_path_snapshot=lambda _r: {
+            "tests/__init__.py": "t0", "tests/test_multiply.py": "t1"},
+        repo_snapshot=repo_snapshot,
+    )
+
+
+def _write_author_test(repo):
+    def go():
+        (repo / "tests" / "test_multiply.py").write_text(AUTHORED_TEST)
+    return go
+
+
+BASE_VIEW = {"mathutil.py": "h1", "tests/__init__.py": "t0"}
+AUTHORED_VIEW = {"mathutil.py": "h1", "tests/__init__.py": "t0",
+                 "tests/test_multiply.py": "t1"}
+IMPLEMENTED_VIEW = {"mathutil.py": "h2", "tests/__init__.py": "t0",
+                    "tests/test_multiply.py": "t1"}
+
+
+def test_implementer_product_change_reaches_record_and_diff(tmp_path):
+    """Contract test 1: implementer modifies mathutil.py in place while the
+    test snapshot is unchanged -> record.changed_files contains mathutil.py
+    and the gatekeeper-reviewed evidence carries a non-empty product_diff
+    with the new line + the new top-level symbol."""
+    repo = _init_product_repo(tmp_path)
+    gatekeeper = ScriptedGatekeeper(["ACCEPT"])
+    executor = _g1_executor_with_worker(
+        repo,
+        _write_author_test(repo),
+        lambda: (repo / "mathutil.py").write_text(PRODUCT_IMPL),
+        [dict(BASE_VIEW), dict(AUTHORED_VIEW), dict(AUTHORED_VIEW),
+         dict(IMPLEMENTED_VIEW)],
+        gatekeeper=gatekeeper,
+    )
+
+    rec = executor.execute_g1(make_checkpoint(), plan_id="plan-1")
+
+    assert rec.supervisor_decision == "ACCEPT"
+    assert "mathutil.py" in rec.changed_files
+    ev = rec.implementation_evidence
+    assert ev["product_diff"] != ""
+    assert "+def multiply(a, b):" in ev["product_diff"]
+    assert "+    return a * b" in ev["product_diff"]
+    assert "multiply" in ev["changed_symbols"]
+    assert "mathutil.py" in ev["git_stat"]
+    # the gatekeeper itself reviewed the record carrying the diff
+    assert "+    return a * b" in gatekeeper.seen[0].implementation_evidence["product_diff"]
+    assert gatekeeper.seen[0].changed_files == rec.changed_files
+
+
+def test_author_and_implementer_changes_are_unioned(tmp_path):
+    """Contract test 2: author adds a test file, implementer changes the
+    product file -> attempt_changed is the sorted union of both."""
+    repo = _init_product_repo(tmp_path)
+    executor = _g1_executor_with_worker(
+        repo,
+        _write_author_test(repo),
+        lambda: (repo / "mathutil.py").write_text(PRODUCT_IMPL),
+        [dict(BASE_VIEW), dict(AUTHORED_VIEW), dict(AUTHORED_VIEW),
+         dict(IMPLEMENTED_VIEW)],
+    )
+    rec = executor.execute_g1(make_checkpoint(), plan_id="plan-1")
+    assert rec.changed_files == sorted(
+        ["tests/test_multiply.py", "mathutil.py"])
+    ev = rec.implementation_evidence
+    assert ev["test_files"] == ["tests/test_multiply.py"]
+    assert "mathutil.py" in ev["product_diff"]
+
+
+def test_author_only_changes_keep_pre_fix_behavior(tmp_path):
+    """Contract test 3 (regression): implementer changes nothing ->
+    behavior identical to pre-fix: only authored test files in
+    changed_files, empty product_diff, no product entry."""
+    repo = _init_product_repo(tmp_path)
+    executor = _g1_executor_with_worker(
+        repo,
+        _write_author_test(repo),
+        lambda: None,
+        [dict(BASE_VIEW), dict(AUTHORED_VIEW), dict(AUTHORED_VIEW),
+         dict(AUTHORED_VIEW)],
+    )
+    rec = executor.execute_g1(make_checkpoint(), plan_id="plan-1")
+    assert rec.changed_files == ["tests/test_multiply.py"]
+    ev = rec.implementation_evidence
+    assert ev["product_diff"] == ""
+    assert ev["changed_symbols"] == []

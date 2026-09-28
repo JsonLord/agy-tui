@@ -1131,6 +1131,11 @@ class G1Executor:
                 + "Do NOT modify any file under the test paths."
             )
             implementer_before = self._test_path_snapshot(self.config.repo)
+            # P9.2 defect fix: the repo snapshot around the implementer
+            # captures PRODUCT-file changes; the test-path snapshot alone can
+            # never see them, and without this the record shipped an empty
+            # product_diff while the git_stat proved an implementation change.
+            implementer_repo_before = self._repo_snapshot(self.config.repo)
             implementer_since_ms = int(self._clock() * 1000)
             implementer_result = self._dispatch_worker(
                 ROLE_IMPLEMENTER, impl_prompt, str(self.config.repo)
@@ -1180,6 +1185,16 @@ class G1Executor:
                 raise TestFileTampered(
                     f"implementer rewrote tests to fit: {tampered}"
                 )
+
+            # Implement guard passed — now diff the whole repo around the
+            # implementer's work and keep only the product-file changes
+            # (test paths belong to `tampered`, artifacts belong to neither).
+            implementer_repo_after = self._repo_snapshot(self.config.repo)
+            implementer_changed = [
+                p for p in _changed_paths(implementer_repo_before, implementer_repo_after)
+                if not _under_test_path(p, self.config.test_path)
+                and not _is_tooling_artifact(p)
+            ]
 
             # -- 7. GREEN --------------------------------------------------------
             green_rc, green_out, green_err = self._run_test(
@@ -1233,7 +1248,7 @@ class G1Executor:
                  "detail": f"full suite exit 0 (attempt {attempt})"},
             ]
             attempt_changed = sorted(
-                set(base["changed_files"]) | set(tampered)
+                set(base["changed_files"]) | set(tampered) | set(implementer_changed)
             )
             impl_evidence = build_implementation_evidence(
                 self.config.repo,
