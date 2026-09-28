@@ -454,5 +454,78 @@ def nemotron_chat(prompt: str) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# P8 checkpoint-planning surface (APPENDED; existing tools unchanged).
+# Plain implementations live in
+# app/orchestration/checkpoint_planning/mcp_tools.py — these wrappers
+# only expose them over MCP for Gemini-in-AGY-CLI / MiMo Pro fallback.
+# ---------------------------------------------------------------------------
+
+from app.orchestration.checkpoint_planning import mcp_tools as _p8_tools  # noqa: E402
+
+
+@mcp.tool()
+def agy_project_inspect_tool(repo: str) -> str:
+    """Bounded AGY project identity for planning (no file dumps)."""
+    return json.dumps(_p8_tools.agy_project_inspect_tool(repo), indent=2)
+
+
+@mcp.tool()
+def agy_design_context_tool(repo: str, query: str = "") -> str:
+    """Bounded design excerpts (design.md/docs/prototypes), keyword-targeted."""
+    return json.dumps(_p8_tools.agy_design_context_tool(repo, query), indent=2)
+
+
+@mcp.tool()
+def agy_learnings_read_tool(repo: str, query: str = "") -> str:
+    """Bounded learnings.md topics (## sections), keyword-matched when queried."""
+    return json.dumps(_p8_tools.agy_learnings_read_tool(repo, query), indent=2)
+
+
+@mcp.tool()
+def agy_gate_templates_tool() -> str:
+    """Canonical gate-preseed templates (G1-G4, version 1)."""
+    return json.dumps(_p8_tools.agy_gate_templates_tool(), indent=2)
+
+
+@mcp.tool()
+def agy_codebase_analyze_tool(
+    repo: str,
+    objective: str,
+    questions: list[str] | None = None,
+    focus: list[str] | None = None,
+) -> str:
+    """One read-only analyst investigation (Graphify -> Serena). Never mutates."""
+    return json.dumps(
+        _p8_tools.agy_codebase_analyze_tool(repo, objective, questions, focus),
+        indent=2,
+    )
+
+
+@mcp.tool()
+def agy_checkpoint_plan_validate_tool(plan_json: str) -> str:
+    """Deterministically validate a CheckpointPlan document (read-only)."""
+    return json.dumps(
+        _p8_tools.agy_checkpoint_plan_validate_tool(plan_json), indent=2
+    )
+
+
+@mcp.tool()
+def agy_checkpoint_plan_preview_tool(plan_json: str) -> str:
+    """Plain-language preview of a CheckpointPlan plus validation outcome."""
+    return json.dumps(
+        _p8_tools.agy_checkpoint_plan_preview_tool(plan_json), indent=2
+    )
+
+
+@mcp.tool()
+def agy_checkpoint_plan_submit_tool(plan_json: str, state_root: str) -> str:
+    """Submit a gate-preseeded plan to durable state; yields to AGY-local."""
+    return json.dumps(
+        _p8_tools.agy_checkpoint_plan_submit_tool(plan_json, state_root),
+        indent=2,
+    )
+
+
 if __name__ == "__main__":
     mcp.run()
