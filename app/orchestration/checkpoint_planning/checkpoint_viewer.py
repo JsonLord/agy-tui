@@ -89,9 +89,14 @@ def load_plan(state_root: Path | str, plan_id: str) -> CheckpointPlan:
     return plan
 
 
-def render_plan(plan: CheckpointPlan) -> str:
+def render_plan(plan: CheckpointPlan, state_root: Path | str | None = None) -> str:
     """Plain-text render of the whole plan (where am I / what passed /
-    what waits for me / what my options do)."""
+    what waits for me / what my options do).
+
+    ``state_root`` (P12) additionally surfaces the planner-replan state
+    of parked/repaired G4 gates — read-only, from the canonical
+    per-plan runs directory.
+    """
     lines: list[str] = []
     lines.append(f"PLAN {plan.plan_id}  status={plan.status}  revision={plan.revision}")
     lines.append(f"  objective: {plan.objective}")
@@ -128,7 +133,38 @@ def render_plan(plan: CheckpointPlan) -> str:
         g4 = cp.gate_records.get(G4_HUMAN_GATE_ID)
         if g4 is not None and g4.status.value == "WAITING_FOR_HUMAN":
             lines.append(_pending_human_block(cp.checkpoint_id))
+        if g4 is not None and g4.status.value in ("REPAIR", "WAITING_FOR_HUMAN"):
+            lines.extend(_planner_replan_lines(state_root, plan.plan_id, cp.checkpoint_id))
     return "\n".join(lines) + "\n"
+
+
+def _planner_replan_lines(
+    state_root: Path | str | None, plan_id: str, checkpoint_id: str
+) -> list[str]:
+    """P12: surface planner-input (replan) request status for a parked or
+    repaired G4 gate. Read-only; absent state renders nothing."""
+    if state_root is None:
+        return []
+    from app.orchestration.checkpoint_planning.planner_input_consumer import (
+        requests_dir,
+    )
+
+    out: list[str] = []
+    directory = requests_dir(state_root, plan_id, checkpoint_id)
+    if not directory.is_dir():
+        return out
+    for path in sorted(directory.glob("*.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        out.append(
+            f"  planner replan: {doc.get('status', 'UNKNOWN')} "
+            f"({doc.get('request_id', path.stem)})"
+        )
+    return out
 
 
 def _pending_human_block(checkpoint_id: str) -> str:
@@ -152,4 +188,5 @@ def _pending_human_block(checkpoint_id: str) -> str:
 def view_checkpoint(state_root: Path | str, plan_id: str) -> str:
     """One call: locate, load, validate, render. Raises
     :class:`CheckpointViewerError` on missing/malformed canonical state."""
-    return render_plan(load_plan(state_root, plan_id))
+    root = Path(state_root).expanduser()
+    return render_plan(load_plan(root, plan_id), state_root=root)
