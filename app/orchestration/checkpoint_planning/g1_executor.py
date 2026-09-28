@@ -20,13 +20,19 @@ Design rules encoded here:
   - ``IMPLEMENTER`` (agent ``agy-dispatch``) may never touch test files —
     any test-file change is ``TestFileTampered`` and the gate is REJECTED.
 * Every external effect is an injectable seam (``run_test``,
-  ``dispatch_worker``, ``gatekeeper``, ``sentinel``, ``session_capturer``,
+  ``dispatch_worker``, ``gatekeeper``, ``sentinel``, ``session_capturer`` / ``session_read_back``,
   ``test_path_snapshot``, ``repo_snapshot``); unit tests use fakes only.
   The defaults wire to ``run_supervised`` (workers), subprocess (tests),
   the P7 ``SentinelRuntime`` (long-run monitoring — models never own
   wait loops), and :class:`MiMoProGatekeeper` (the default live
   gatekeeper, same injected-http transport pattern as
   ``MiMoProFallbackPlanner``).
+  Worker sessions are captured with the P4-proven resolution order
+  (``agy_session.capture_session``): stdout first, then a single
+  server read-back filtered by agent + directory + since-timestamp —
+  ``opencode-supervise`` prints no ``Session ID:`` line (proven live in
+  P3), so stdout alone can never satisfy the "persist the exact OpenCode
+  session id" contract.
 * The gatekeeper failing is fail-closed: the gate stays ACTIVE, nothing
   is written, ``GatekeeperUnavailable`` propagates, the attempt is
   resumable. REPAIR is bounded by ``max_attempts`` — exhaustion REJECTs.
@@ -479,16 +485,9 @@ class MiMoProGatekeeper:
 # ---------------------------------------------------------------------------
 
 
-def _default_session_capturer(role: str, text: str) -> str | None:
-    """Extract a real session id from worker output — never invent one."""
-    import re
-
-    match = re.search(
-        r"session[_ ](?:id)?[=:\s]+([A-Za-z0-9][A-Za-z0-9_.:-]*)",
-        str(text or ""),
-        re.IGNORECASE,
-    )
-    return match.group(1) if match else None
+# ---------------------------------------------------------------------------
+# Session capture (live path; unit tests inject session_capturer)
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +511,8 @@ class G1Executor:
         dispatch_worker: Callable[[str, str, str], Any] | None = None,
         gatekeeper: G1Gatekeeper | None = None,
         sentinel: Any | None = None,
-        session_capturer: Callable[[str, str], str | None] | None = None,
+        session_capturer: Callable[[str, Any, int], tuple[str | None, str]] | None = None,
+        session_read_back: Callable[..., str | None] | None = None,
         clock: Callable[[], float] = time.time,
         test_path_snapshot: Callable[[Path], Any] | None = None,
         repo_snapshot: Callable[[Path], Any] | None = None,
@@ -532,7 +532,8 @@ class G1Executor:
         self._gatekeeper = gatekeeper
         self._gatekeeper_config = gatekeeper_config
         self._sentinel = sentinel
-        self._session_capturer = session_capturer or _default_session_capturer
+        self._session_read_back = session_read_back
+        self._session_capturer = session_capturer or self._default_session_capturer
         self._clock = clock
         self._test_path_snapshot = test_path_snapshot or _default_test_path_snapshot
         self._repo_snapshot = repo_snapshot or _default_repo_snapshot
@@ -541,6 +542,50 @@ class G1Executor:
         self.emitted_records: list[GateExecutionRecord] = []
         #: ordered ``(gate_id, from, to, actor)`` transitions observed.
         self.transition_log: list[tuple[str, GateStatus, GateStatus, str]] = []
+
+    def _default_session_capturer(
+        self, role: str, result: Any, since_ms: int
+    ) -> tuple[str | None, str]:
+        """Resolve the worker's real session id — P4 order: stdout -> read-back.
+
+        ``opencode-supervise`` never prints a ``Session ID:`` line (proven
+        live in P3), so stdout alone can never satisfy the "persist the exact
+        OpenCode session id" contract by itself. The read-back is a single
+        GET of the OpenCode session list filtered by agent + directory +
+        ``since_ms``. Returns ``(session_id, source)`` with source in
+        ``stdout|readback|none`` (persisted alongside the id so the capture
+        path is auditable). Every failure yields ``(None, "none")`` — capture
+        never fails the execution path and never invents an id.
+        """
+        from app.orchestration import agy_session
+        from app.integrations.external_stack import OPENCODE_SERVER
+
+        text = str(getattr(result, "output", "") or "")
+        try:
+            stdout_id = agy_session.extract_session_from_stdout(text)
+        except Exception:  # noqa: BLE001 - capture never raises
+            stdout_id = None
+        if stdout_id:
+            return str(stdout_id), agy_session.SOURCE_STDOUT
+
+        agent = AGENT_FOR_ROLE.get(role)
+        resolve = self._session_read_back
+        if resolve is None:
+            resolve = agy_session.read_back_session
+        try:
+            session_id = resolve(
+                server=str(OPENCODE_SERVER),
+                agent=agent,
+                directory=str(self.config.repo),
+                since_ms=int(since_ms),
+            )
+        except Exception:  # noqa: BLE001 - capture never raises
+            return None, agy_session.SOURCE_NONE
+        return (
+            (str(session_id), agy_session.SOURCE_READBACK)
+            if session_id
+            else (None, agy_session.SOURCE_NONE)
+        )
 
     # -- seams: live defaults --------------------------------------------------
 
@@ -741,17 +786,23 @@ class G1Executor:
             "expected first RED."
         )
         repo_before = self._repo_snapshot(self.config.repo)
+        author_since_ms = int(self._clock() * 1000)
         author_result = self._dispatch_worker(
             ROLE_TEST_AUTHOR, author_prompt, str(self.config.repo)
         )
         repo_after = self._repo_snapshot(self.config.repo)
         author_changed = _changed_paths(repo_before, repo_after)
-        author_session = self._session_capturer(
-            ROLE_TEST_AUTHOR, getattr(author_result, "output", "")
+        author_session, author_source = self._session_capturer(
+            ROLE_TEST_AUTHOR, author_result, author_since_ms
         )
         author_ok = bool(getattr(author_result, "ok", True))
         base["worker_sessions"].append(
-            {"role": "test-author", "session_id": author_session, "ok": author_ok}
+            {
+                "role": "test-author",
+                "session_id": author_session,
+                "session_source": author_source,
+                "ok": author_ok,
+            }
         )
 
         # -- 3. AUTHOR GUARD ------------------------------------------------------
@@ -838,16 +889,22 @@ class G1Executor:
                 + "Do NOT modify any file under the test paths."
             )
             implementer_before = self._test_path_snapshot(self.config.repo)
+            implementer_since_ms = int(self._clock() * 1000)
             implementer_result = self._dispatch_worker(
                 ROLE_IMPLEMENTER, impl_prompt, str(self.config.repo)
             )
-            implementer_session = self._session_capturer(
-                ROLE_IMPLEMENTER, getattr(implementer_result, "output", "")
+            implementer_session, implementer_source = self._session_capturer(
+                ROLE_IMPLEMENTER, implementer_result, implementer_since_ms
             )
             implementer_ok = bool(getattr(implementer_result, "ok", True))
             sessions = [
-                {"role": "implementer", "session_id": implementer_session,
-                 "ok": implementer_ok, "attempt": attempt}
+                {
+                    "role": "implementer",
+                    "session_id": implementer_session,
+                    "session_source": implementer_source,
+                    "ok": implementer_ok,
+                    "attempt": attempt,
+                }
             ]
             if not implementer_ok:
                 self._rejected_record(

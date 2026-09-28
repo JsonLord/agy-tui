@@ -171,7 +171,7 @@ def build_executor(
         if gatekeeper is not None
         else ScriptedGatekeeper(["ACCEPT"]),
         sentinel=sentinel,
-        session_capturer=lambda role, text: f"sess-{role}",
+        session_capturer=lambda role, result, since_ms: (f"sess-{role}", "stdout"),
         clock=clock or (lambda: 1_760_000_000.0),
         test_path_snapshot=test_path_snapshot,
         repo_snapshot=repo_snapshot,
@@ -516,7 +516,7 @@ def test_missing_gatekeeper_fails_closed_at_review():
         gatekeeper_config=None,        # <-- and no live config
         run_test=run_test,
         dispatch_worker=lambda role, prompt, repo: FakeWorkerResult(),
-        session_capturer=lambda role, text: f"sess-{role}",
+        session_capturer=lambda role, result, since_ms: (f"sess-{role}", "stdout"),
         clock=lambda: 1_760_000_000.0,
         repo_snapshot=repo_snapshot,
         test_path_snapshot=lambda r: {"tests/test_x.py": "1"},
@@ -796,3 +796,60 @@ def test_implement_guard_allows_bytecode_but_catches_source_tamper(tmp_path):
         assert False, "expected TestFileTampered"
     except TestFileTampered as e:
         assert "tests/test_frozen.py" in str(e)
+
+
+# ---------------------------------------------------------------------------
+# Session capture default (P4 order): stdout -> read-back -> none
+# opencode-supervise prints NO "Session ID:" line (proven live in P3),
+# so the read-back is the real source in practice; both are audited via
+# the persisted session_source. Capture must never raise.
+# ---------------------------------------------------------------------------
+
+
+class _WorkerOut:
+    def __init__(self, output):
+        self.ok = True
+        self.output = output
+
+
+def test_session_capturer_stdout_line_wins_without_readback():
+    executor = build_executor()
+    readbacks = []
+    executor._session_read_back = (
+        lambda **kw: readbacks.append(kw) or "ses_should_not_be_used"
+    )
+    sid, source = executor._default_session_capturer(
+        g1x.ROLE_TEST_AUTHOR, _WorkerOut("log noise\nSession ID: ses_abc123\n"), 123
+    )
+    assert (sid, source) == ("ses_abc123", "stdout")
+    assert readbacks == []  # no read-back needed when stdout has the id
+
+
+def test_session_capturer_falls_back_to_readback_when_stdout_is_bare():
+    executor = build_executor()
+    seen = {}
+
+    def read_back(**kw):
+        seen.update(kw)
+        return "ses_readback42"
+
+    executor._session_read_back = read_back
+    sid, source = executor._default_session_capturer(
+        g1x.ROLE_IMPLEMENTER, _WorkerOut("done, no session line printed"), 1234
+    )
+    assert (sid, source) == ("ses_readback42", "readback")
+    assert seen["agent"] == "agy-dispatch"  # AGENT_FOR_ROLE mapping used
+    assert seen["directory"] == str(executor.config.repo)
+    assert seen["since_ms"] == 1234
+    assert seen["server"]  # OPENCODE_SERVER wired through
+
+
+def test_session_capturer_never_raises_and_never_invents():
+    executor = build_executor()
+    executor._session_read_back = (
+        lambda **kw: (_ for _ in ()).throw(ConnectionError("down"))
+    )
+    sid, source = executor._default_session_capturer(
+        g1x.ROLE_TEST_AUTHOR, _WorkerOut("Session ID: not-a-session-format"), 5
+    )
+    assert (sid, source) == (None, "none")  # bare non-ses_ text is ignored, no id invented
