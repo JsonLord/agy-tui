@@ -65,8 +65,12 @@ class TokenBudget(str, Enum):
     NORMAL = "NORMAL"
 
 
-class TestKind(str, Enum):
+class TestClassification(str, Enum):
     """The three test classes AGY distinguishes (never conflates)."""
+
+    # pytest collection contract: this name is domain vocabulary, not a test
+    # class (pytest 8+ warns/errs on `Test*` classes with constructors).
+    __test__ = False
 
     DEVELOPMENT_TEST = "DEVELOPMENT_TEST"
     PROMOTION_TEST = "PROMOTION_TEST"
@@ -526,7 +530,7 @@ def reconcile_after_failure(
 # ---------------------------------------------------------------------------
 
 
-def classify_test(command: str) -> TestKind:
+def classify_test(command: str) -> TestClassification:
     """Deterministic classification of a verification command.
 
     * LIVE_MODEL_SMOKE: a command that invokes a model/planner by name.
@@ -541,7 +545,7 @@ def classify_test(command: str) -> TestKind:
         "planner", "gatekeeper", "mimo", "openai", "chat.completions",
     )
     if any(m in low for m in model_markers):
-        return TestKind.LIVE_MODEL_SMOKE
+        return TestClassification.LIVE_MODEL_SMOKE
     tokens = low.split()
     if "pytest" in low or "unittest" in low:
         is_full = True
@@ -551,8 +555,8 @@ def classify_test(command: str) -> TestKind:
             ):
                 is_full = False
         if is_full:
-            return TestKind.PROMOTION_TEST
-    return TestKind.DEVELOPMENT_TEST
+            return TestClassification.PROMOTION_TEST
+    return TestClassification.DEVELOPMENT_TEST
 
 
 def validate_task_budgets(plan: DelegationPlan) -> list[str]:
@@ -570,13 +574,13 @@ def validate_task_budgets(plan: DelegationPlan) -> list[str]:
     for task in plan.tasks:
         for cmd in task.verification_commands:
             kind = classify_test(cmd)
-            if kind == TestKind.PROMOTION_TEST:
+            if kind == TestClassification.PROMOTION_TEST:
                 issues.append(
                     f"task {task.id!r}: full-suite command {cmd!r} is "
                     "PROMOTION_TEST — run it once at the promotion boundary, "
                     "not as per-task development verification"
                 )
-            if kind == TestKind.LIVE_MODEL_SMOKE:
+            if kind == TestClassification.LIVE_MODEL_SMOKE:
                 if task.model_budget != TokenBudget.TINY:
                     issues.append(
                         f"task {task.id!r}: live-model verification {cmd!r} "
@@ -732,7 +736,7 @@ class PromotionGate:
 
 __all__ = [
     "TokenBudget",
-    "TestKind",
+    "TestClassification",
     "TaskStatus",
     "PRODUCTION_ROLES",
     "DEFAULT_DEV_WORKER_MODEL",

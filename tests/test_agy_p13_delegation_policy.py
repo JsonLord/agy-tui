@@ -24,7 +24,7 @@ from app.orchestration.checkpoint_planning.delegation_policy import (
     DEFAULT_DEV_WORKER_MODEL,
     DelegationPlan,
     DelegatedTask,
-    TestKind,
+    TestClassification,
     TokenBudget,
     TaskStatus,
     acceptance_checks,
@@ -300,25 +300,25 @@ class FailureFixerTests(unittest.TestCase):
             spawn_fixer(plan, "A", "no failure here")
 
 
-class TestKindTests(unittest.TestCase):
+class TestClassificationTests(unittest.TestCase):
     def test_full_suite_is_promotion_test(self):
-        self.assertEqual(classify_test("python3 -m pytest -q"), TestKind.PROMOTION_TEST)
-        self.assertEqual(classify_test("python3 -m pytest tests"), TestKind.PROMOTION_TEST)
+        self.assertEqual(classify_test("python3 -m pytest -q"), TestClassification.PROMOTION_TEST)
+        self.assertEqual(classify_test("python3 -m pytest tests"), TestClassification.PROMOTION_TEST)
 
     def test_focused_file_is_development_test(self):
         self.assertEqual(
             classify_test("python3 -m pytest tests/test_x.py -q"),
-            TestKind.DEVELOPMENT_TEST,
+            TestClassification.DEVELOPMENT_TEST,
         )
         self.assertEqual(
-            classify_test("python3 -m compileall -q app"), TestKind.DEVELOPMENT_TEST
+            classify_test("python3 -m compileall -q app"), TestClassification.DEVELOPMENT_TEST
         )
-        self.assertEqual(classify_test("git diff --check"), TestKind.DEVELOPMENT_TEST)
+        self.assertEqual(classify_test("git diff --check"), TestClassification.DEVELOPMENT_TEST)
 
     def test_model_command_is_live_smoke(self):
-        self.assertEqual(classify_test("agy -p make a plan"), TestKind.LIVE_MODEL_SMOKE)
+        self.assertEqual(classify_test("agy -p make a plan"), TestClassification.LIVE_MODEL_SMOKE)
         self.assertEqual(
-            classify_test("python3 -m app.run_supervised"), TestKind.LIVE_MODEL_SMOKE
+            classify_test("python3 -m app.run_supervised"), TestClassification.LIVE_MODEL_SMOKE
         )
 
     def test_full_suite_in_task_flagged(self):
