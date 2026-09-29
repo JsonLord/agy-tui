@@ -88,6 +88,16 @@ from app.orchestration.cloud_batch.human_bridge import (
     park_view,
     record_human_response,
 )
+from app.orchestration.cloud_batch.authority import (
+    ROUTED_STATUS,
+    ROLE_CLASSIFICATION,
+    LoweringError,
+    MutationClass,
+    MutationClassificationError,
+    classify_delegation,
+    dispatch_batch,
+    lower_batch_to_checkpoint,
+)
 
 __all__ = [
     "BATCH_OUTCOME_MAX_BYTES",
@@ -143,4 +153,12 @@ __all__ = [
     "DuplicateHumanResponse",
     "park_view",
     "record_human_response",
+    "MutationClass",
+    "ROLE_CLASSIFICATION",
+    "classify_delegation",
+    "MutationClassificationError",
+    "LoweringError",
+    "ROUTED_STATUS",
+    "lower_batch_to_checkpoint",
+    "dispatch_batch",
 ]

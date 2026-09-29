@@ -28,6 +28,33 @@ the original task stays FAILED and the reentry gate escalates
 (BATCH_FAILED_WITH_ESCALATION). Tasks blocked by a failed dependency
 are deterministically CANCELLED (with a raw-evidence note) so the
 outcome is always complete.
+
+P16 authority rules (this module hosts the dispatch CHOKE POINT):
+
+* :meth:`BatchDispatcher.run_batch` first classifies every
+  CLOUD-AUTHORED delegation of the plan it is about to execute
+  (``plan.delegations`` — never the P13 task list; runtime fixers are
+  excluded by construction). ANY mutating delegation raises
+  :class:`MutationClassificationError` before anything else happens:
+  no runner calls, no wave computation, no state writes, no reentry
+  mark. Mutating batches lower into the checkpoint runtime via
+  :func:`app.orchestration.cloud_batch.authority.dispatch_batch`.
+* The direct execution path is READ-ONLY-ONLY: ``dispatch_batch``
+  builds the dispatcher with ``max_fixers=0``, so the direct path
+  NEVER spawns mutating fixers (a failed read-only task escalates via
+  BATCH_FAILED_WITH_ESCALATION — the cloud reentry decides retry; a
+  read-only batch must not gain a mutating repair). The constructor
+  keeps the ``max_fixers`` parameter (default 3) and the whole P13
+  fixer MECHANISM is retained for the P18 authority-execution
+  integration — unreachable from the P16 direct path.
+* Resume compatibility with routed outcomes: the statuses side-dict
+  now holds P13 :class:`TaskStatus` values OR the
+  :data:`...authority.ROUTED_STATUS` marker string (``"CHECKPOINT_ROUTED"``,
+  persisted by :func:`dispatch_batch` for delegations lowered to the
+  checkpoint runtime — it is not a TaskStatus). ROUTED_STATUS counts
+  as TERMINAL + SATISFIED (like VERIFIED) everywhere it is consulted
+  (wave eligibility, :meth:`_blocked_ids`, :meth:`_evaluate_reentry`)
+  and is never re-executed.
 """
 
 from __future__ import annotations
@@ -43,6 +70,12 @@ from app.orchestration.checkpoint_planning.delegation_policy import (
     TokenBudget,
     dispatch_waves,
     spawn_fixer,
+)
+from app.orchestration.cloud_batch.authority import (
+    ROUTED_STATUS,
+    MutationClass,
+    MutationClassificationError,
+    classify_delegation,
 )
 from app.orchestration.cloud_batch.outcome import (
     build_batch_outcome,
@@ -67,6 +100,13 @@ _TERMINAL = {
     TaskStatus.REJECTED,
     TaskStatus.CANCELLED,
 }
+
+
+def _is_terminal_status(status: Any) -> bool:
+    """P13 terminal status, or the P16 ROUTED_STATUS marker (a delegation
+    lowered to the checkpoint runtime is terminal + satisfied here and is
+    never re-executed — see the module docstring)."""
+    return status in _TERMINAL or status == ROUTED_STATUS
 
 
 class DispatchError(RuntimeError):
@@ -158,6 +198,16 @@ class BatchDispatcher:
     apply bounded retry/failure rules (P13 fresh fixers), create the
     compact BatchOutcome, evaluate the reentry condition, mark
     REENTRY_READY.
+
+    P16: the batch execution path through :meth:`run_batch` is
+    READ-ONLY-ONLY — :meth:`run_batch` first refuses any mutating
+    cloud-authored delegation (:class:`MutationClassificationError`), and
+    the P16 routing helper (``authority.dispatch_batch``) constructs the
+    dispatcher with ``max_fixers=0`` so the direct path never spawns a
+    mutating repair. The fixer mechanism below (P13 ``spawn_fixer``
+    reuse) is RETAINED for the P18 authority-execution integration and is
+    unreachable from the P16 direct path; the constructor default (3) is
+    kept for that reason.
     """
 
     def __init__(
@@ -181,22 +231,56 @@ class BatchDispatcher:
 
     # -- main entry -----------------------------------------------------------
 
-    def run_batch(self, batch_id: str) -> str:
+    def run_batch(self, batch_id: str, *, plan: "BatchPlan | None" = None) -> str:
         """Execute the batch to its deterministic reentry condition.
         Returns the reentry reason. Idempotent across restarts: terminal
         worker results already persisted are loaded, never re-executed —
-        including runtime-spawned fixers (see _rehydrate_fixers)."""
-        plan = self.store.load_batch_plan(self.project_id, batch_id)
+        including runtime-spawned fixers (see _rehydrate_fixers) and
+        P16 CHECKPOINT_ROUTED markers (terminal + satisfied, never
+        re-executed; see the module docstring).
+
+        ``plan`` loads from the store when None (canonical behavior); the
+        P16 routing helper passes an in-memory REDUCED (read-only-only)
+        projection — the canonical plan.json is never rewritten for it.
+
+        THE P16 GUARD runs FIRST (after obtaining the plan): every
+        CLOUD-AUTHORED delegation (``plan.delegations`` — never the P13
+        task list; runtime fixers are excluded by construction) is
+        classified; ANY mutating delegation raises
+        :class:`MutationClassificationError` naming the offending
+        ids/roles and NOTHING else happens (no runner calls, no wave
+        computation, no state writes, no reentry mark)."""
+        if plan is None:
+            plan = self.store.load_batch_plan(self.project_id, batch_id)
+
+        offenders = [
+            f"{spec.id}({spec.role})"
+            for spec in plan.delegations
+            if classify_delegation(spec) is MutationClass.MUTATING
+        ]
+        if offenders:
+            raise MutationClassificationError(
+                "mutating delegations must not be dispatched directly — "
+                "they belong to the checkpoint runtime (lower via "
+                "authority.dispatch_batch): " + ", ".join(sorted(offenders))
+            )
+
         delegation = build_delegation_plan(
             plan, base_sha=self.base_sha, workdir=self.workdir
         )
 
-        statuses: dict[str, TaskStatus] = {}
+        statuses: dict[str, TaskStatus | str] = {}
         outcomes: dict[str, Any] = self.store.load_worker_outcomes(
             self.project_id, batch_id
         )
         for delegation_id, wo in outcomes.items():
-            statuses[delegation_id] = TaskStatus(wo.status)
+            if wo.status == ROUTED_STATUS:
+                # P16 route marker (already lowered to the checkpoint
+                # runtime): not a TaskStatus — map to the sentinel the
+                # terminal/satisfied checks below treat like VERIFIED.
+                statuses[delegation_id] = ROUTED_STATUS
+            else:
+                statuses[delegation_id] = TaskStatus(wo.status)
 
         # Crash-resume rehydration (Worker-A defect 1): fixers are spawned
         # at RUNTIME and only ever persisted as worker outcomes — plan.json
@@ -216,7 +300,9 @@ class BatchDispatcher:
 
         while True:
             nonterminal = [
-                t for t in delegation.tasks if statuses.get(t.id, TaskStatus.PENDING) not in _TERMINAL
+                t
+                for t in delegation.tasks
+                if not _is_terminal_status(statuses.get(t.id, TaskStatus.PENDING))
             ]
             if not nonterminal:
                 break
@@ -248,7 +334,7 @@ class BatchDispatcher:
                 eligible = [
                     tid
                     for tid in wave
-                    if statuses.get(tid, TaskStatus.PENDING) not in _TERMINAL
+                    if not _is_terminal_status(statuses.get(tid, TaskStatus.PENDING))
                     and tid not in blocked
                 ]
                 if not eligible:
@@ -284,7 +370,7 @@ class BatchDispatcher:
         self,
         wave: list[str],
         delegation: DelegationPlan,
-        statuses: dict[str, TaskStatus],
+        statuses: dict[str, TaskStatus | str],
         outcomes: dict[str, Any],
         batch_id: str,
     ) -> None:
@@ -332,7 +418,7 @@ class BatchDispatcher:
         delegation: DelegationPlan,
         plan: BatchPlan,
         outcomes: dict[str, Any],
-        statuses: dict[str, TaskStatus],
+        statuses: dict[str, TaskStatus | str],
     ) -> None:
         """Crash-resume: re-add runtime-spawned fixer task shells.
 
@@ -360,6 +446,8 @@ class BatchDispatcher:
         by_id = {t.id: t for t in delegation.tasks}
         specs_by_id = {d.id: d for d in plan.delegations}
         for task_id in sorted(outcomes):
+            if outcomes[task_id].status == ROUTED_STATUS:
+                continue  # P16 route marker — never a fixer shell, never TaskStatus-mapped
             original = self._original_of(task_id)
             if original is None or original not in by_id:
                 continue
@@ -397,7 +485,7 @@ class BatchDispatcher:
             delegation.tasks.append(fixer)
 
     def _promote_fixer_results(
-        self, delegation: DelegationPlan, statuses: dict[str, TaskStatus]
+        self, delegation: DelegationPlan, statuses: dict[str, TaskStatus | str]
     ) -> None:
         """reconcile_after_failure semantics: the fixer takes the failed
         task's slot. A fixer that reached VERIFIED/ACCEPTED promotes the
@@ -417,7 +505,7 @@ class BatchDispatcher:
                     statuses[original] = fixer_status
 
     def _try_spawn_fixers(
-        self, delegation: DelegationPlan, statuses: dict[str, TaskStatus]
+        self, delegation: DelegationPlan, statuses: dict[str, TaskStatus | str]
     ) -> bool:
         """For each FAILED cloud-authored task whose fixers are all
         terminal: spawn the next fresh bounded fixer (P13). Budget
@@ -463,13 +551,15 @@ class BatchDispatcher:
         return spawned_any
 
     def _blocked_ids(
-        self, delegation: DelegationPlan, statuses: dict[str, TaskStatus]
+        self, delegation: DelegationPlan, statuses: dict[str, TaskStatus | str]
     ) -> set[str]:
         """reconcile_after_failure blocking semantics: ids that can never
         run because a dependency is FAILED (fixer budget exhausted) or
         already CANCELLED this pass. REJECTED is P13 "done" for wave
         computation — dependents of a gate-rejected task keep P13
-        semantics (they may still run)."""
+        semantics (they may still run). P16: a ROUTED_STATUS dependency is
+        satisfied (like VERIFIED — its authority moved to the checkpoint
+        runtime), never blocking."""
         by_id = {t.id: t for t in delegation.tasks}
 
         def blocked_transitively(task_id: str) -> bool:
@@ -477,7 +567,10 @@ class BatchDispatcher:
                 dep_status = statuses.get(dep, TaskStatus.PENDING)
                 if dep_status in {TaskStatus.FAILED, TaskStatus.CANCELLED}:
                     return True
-                if dep_status in {TaskStatus.VERIFIED, TaskStatus.ACCEPTED}:
+                if (
+                    dep_status in {TaskStatus.VERIFIED, TaskStatus.ACCEPTED}
+                    or dep_status == ROUTED_STATUS
+                ):
                     continue
                 if blocked_transitively(dep):
                     return True
@@ -486,14 +579,14 @@ class BatchDispatcher:
         return {
             t.id
             for t in delegation.tasks
-            if statuses.get(t.id, TaskStatus.PENDING) not in _TERMINAL
+            if not _is_terminal_status(statuses.get(t.id, TaskStatus.PENDING))
             and blocked_transitively(t.id)
         }
 
     def _cancel_blocked(
         self,
         delegation: DelegationPlan,
-        statuses: dict[str, TaskStatus],
+        statuses: dict[str, TaskStatus | str],
         outcomes: dict[str, Any],
         batch_id: str,
     ) -> None:
@@ -519,12 +612,17 @@ class BatchDispatcher:
 
     # -- reentry condition -----------------------------------------------------------
 
-    def _evaluate_reentry(self, plan: BatchPlan, statuses: dict[str, TaskStatus]) -> str:
+    def _evaluate_reentry(
+        self, plan: BatchPlan, statuses: dict[str, TaskStatus | str]
+    ) -> str:
         """Deterministic reentry reason. The dispatcher emits
         ALL_REQUIRED_DELEGATIONS_COMPLETE or BATCH_FAILED_WITH_ESCALATION;
         REPLAN_REQUIRED and HUMAN_FEEDBACK_CONTINUATION_READY are set by
         the higher supervisor through protocol.mark_reentry_ready (e.g.
-        after a P13-admitted human-feedback continuation is ready)."""
+        after a P13-admitted human-feedback continuation is ready).
+        P16: a required id in ROUTED_STATUS counts as satisfied (like
+        VERIFIED) — its execution authority moved to the checkpoint
+        runtime; the reentry gate only reports batch mechanics."""
         required = (
             set(plan.reentry.required_ids)
             if plan.reentry.required_ids
@@ -536,7 +634,8 @@ class BatchDispatcher:
         if failed_required:
             return "BATCH_FAILED_WITH_ESCALATION"
         all_required = all(
-            statuses.get(tid) in {TaskStatus.VERIFIED, TaskStatus.ACCEPTED}
+            statuses.get(tid)
+            in {TaskStatus.VERIFIED, TaskStatus.ACCEPTED, ROUTED_STATUS}
             for tid in required
         )
         if all_required:

@@ -3,6 +3,17 @@
 ZERO live Gemini / MiMo calls: fake cloud planner (counting invocations),
 fake worker runner (injected results), temp state roots.
 
+P16 RETARGETING (user-confirmed 2026-09-29): P14's run_batch previously
+executed mutating roles (implementer / test-author) directly. That is the
+uncontrolled write path P16 closed — mutating delegations are LOWERED to
+the checkpoint runtime (never executed), read-only delegations still
+execute directly, and crash-resume invariants are re-asserted on read-only
+batches. Every test that drove a MUTATING batch through run_batch is
+retargeted to dispatch_batch against the NEW semantics; nothing deleted,
+each invariant translated. The fixer MECHANISM stays in the dispatcher
+(P13 reuse, retained for the P18 authority-execution integration) but the
+direct path never spawns fixers — see test_22d for its unit coverage.
+
 Proofs covered (per P14 contract):
  1. NEW -> exactly one CLARIFY call
  2. CLARIFY dispatches zero workers
@@ -47,13 +58,19 @@ from pathlib import Path
 
 import pytest
 
-from app.orchestration.checkpoint_planning.delegation_policy import TaskStatus
+from app.orchestration.checkpoint_planning.delegation_policy import (
+    TaskStatus,
+    spawn_fixer,
+)
 from app.orchestration.cloud_batch import (
+    ROUTED_STATUS,
     BatchDispatcher,
     CloudPlanner,
     CloudProtocol,
     ProjectStore,
     WorkerRunResult,
+    build_delegation_plan,
+    dispatch_batch,
     schemas,
 )
 from app.orchestration.cloud_batch.planner import (
@@ -188,6 +205,33 @@ def two_task_plan(**over) -> schemas.BatchPlan:
     return schemas.BatchPlan(**defaults)
 
 
+def ro_two_task_plan(**over) -> schemas.BatchPlan:
+    """P16: the same two-delegation shape as two_task_plan, but READ-ONLY
+    roles (investigation/review) — these batches stay on the direct
+    dispatch path under the P16 authority rules."""
+    defaults = dict(
+        batch_id="batch-001",
+        objective="investigate and review the thing",
+        delegations=[
+            schemas.DelegationSpec(
+                id="a",
+                role="codebase-investigator",
+                objective="map core",
+                owned_files=["core.py"],
+            ),
+            schemas.DelegationSpec(
+                id="b",
+                role="ui-reviewer",
+                objective="review surface",
+                owned_files=["tests/core.py"],
+            ),
+        ],
+        parallelism=4,
+    )
+    defaults.update(over)
+    return schemas.BatchPlan(**defaults)
+
+
 def chain(tmp_path: Path, planner: CountingPlanner, runner: FakeRunner):
     store = make_store(tmp_path)
     store.create_project(make_contract())
@@ -196,6 +240,17 @@ def chain(tmp_path: Path, planner: CountingPlanner, runner: FakeRunner):
         store, "p14-proj", runner=runner, protocol=protocol, workdir="/tmp"
     )
     return store, protocol, dispatcher
+
+
+def dispatch(store, protocol, runner, batch_id="batch-001", workdir="/tmp") -> str:
+    """P16 canonical dispatch entry: all-read-only plans execute directly
+    (through this helper the dispatcher is built with max_fixers=0); any
+    mutating delegation lowers/routes instead. Returns the reentry reason."""
+    resp = dispatch_batch(
+        store=store, project_id="p14-proj", protocol=protocol,
+        batch_id=batch_id, runner=runner, workdir=workdir,
+    )
+    return resp["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -280,15 +335,6 @@ def test_05b_planner_exception_fails_closed(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _run_to_reentry(tmp_path, planner, runner):
-    store, protocol, dispatcher = chain(tmp_path, planner, runner)
-    protocol.request_clarify()
-    protocol.record_user_answer("go")
-    protocol.request_batch()
-    reason = dispatcher.run_batch("batch-001")
-    return store, protocol, reason
-
-
 def test_06_batch_running_cannot_invoke_cloud(tmp_path):
     planner = CountingPlanner()
     planner.batch_action = two_task_plan()
@@ -305,23 +351,39 @@ def test_06_batch_running_cannot_invoke_cloud(tmp_path):
 
 
 def test_07_worker_completion_cannot_invoke_cloud(tmp_path):
+    """P16-retargeted: the read-only delegation still executes directly;
+    the mutating one is LOWERED/ROUTED (never executed). Neither worker
+    completion nor the routing makes a single cloud call."""
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan()
+    planner.batch_action = two_task_plan(
+        delegations=[
+            schemas.DelegationSpec(id="a", role="codebase-investigator",
+                                   objective="map core", owned_files=["core.py"]),
+            schemas.DelegationSpec(id="b", role="implementer",
+                                   objective="implement core",
+                                   owned_files=["impl.py"],
+                                   verification=["pytest -q tests/t_b.py"]),
+        ]
+    )
     planner.reentry_actions = [
         schemas.FinalResult(success=True, summary="done")
     ]
-    runner = FakeRunner({"a": WorkerRunResult(status="VERIFIED"),
-                         "b": WorkerRunResult(status="VERIFIED")})
-    store, protocol, dispatcher = chain(tmp_path, planner, runner)
+    runner = FakeRunner({"a": WorkerRunResult(status="VERIFIED")})
+    store, protocol, _ = chain(tmp_path, planner, runner)
     protocol.request_clarify()
     protocol.record_user_answer("go")
     protocol.request_batch()
     calls_before = store.cloud_call_count("p14-proj")
-    reason = dispatcher.run_batch("batch-001")
+    reason = dispatch(store, protocol, runner)
     calls_after_dispatch = store.cloud_call_count("p14-proj")
-    # The dispatcher itself made NO cloud calls: completion only ran the
-    # deterministic gate.
+    # Completion of the read-only worker AND the mutating lowering made
+    # NO cloud calls: only the deterministic gate ran.
     assert calls_after_dispatch == calls_before
+    assert runner.started == ["a"]  # mutating 'b' was never dispatched
+    assert "b" not in runner.started
+    outcomes = store.load_worker_outcomes("p14-proj", "batch-001")
+    assert outcomes["b"].status == ROUTED_STATUS
+    assert store.load_lowered_intent("p14-proj", "batch-001")  # lowering persisted
     assert reason == "ALL_REQUIRED_DELEGATIONS_COMPLETE"
     assert protocol.state() is schemas.CloudProjectState.REENTRY_READY
     # Only the SUPERVISOR reentry may call the cloud — exactly once.
@@ -329,9 +391,18 @@ def test_07_worker_completion_cannot_invoke_cloud(tmp_path):
     assert store.cloud_call_count("p14-proj") == calls_before + 1
 
 
+def _run_to_reentry(tmp_path, planner, runner):
+    store, protocol, _ = chain(tmp_path, planner, runner)
+    protocol.request_clarify()
+    protocol.record_user_answer("go")
+    protocol.request_batch()
+    reason = dispatch(store, protocol, runner)
+    return store, protocol, reason
+
+
 def test_14_all_required_terminal_marks_reentry_ready(tmp_path):
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan()
+    planner.batch_action = ro_two_task_plan()
     runner = FakeRunner({"a": WorkerRunResult(status="VERIFIED"),
                          "b": WorkerRunResult(status="VERIFIED")})
     store, protocol, reason = _run_to_reentry(tmp_path, planner, runner)
@@ -343,7 +414,7 @@ def test_14_all_required_terminal_marks_reentry_ready(tmp_path):
 
 def test_15_one_reentry_generation_one_cloud_call(tmp_path):
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan()
+    planner.batch_action = ro_two_task_plan()
     planner.reentry_actions = [
         schemas.FinalResult(success=True, summary="done")
     ]
@@ -353,9 +424,7 @@ def test_15_one_reentry_generation_one_cloud_call(tmp_path):
     protocol.request_clarify()
     protocol.record_user_answer("go")
     protocol.request_batch()
-    BatchDispatcher(
-        store, "p14-proj", runner=runner, protocol=protocol, workdir="/tmp"
-    ).run_batch("batch-001")
+    dispatch(store, protocol, runner)
     action = protocol.request_reentry("batch-001")
     assert isinstance(action, schemas.FinalResult)
     # The generation's single call is consumed: a duplicate is refused.
@@ -370,8 +439,9 @@ def test_15_one_reentry_generation_one_cloud_call(tmp_path):
 
 
 def test_08_two_independent_workers_concurrent(tmp_path):
+    # P16-retargeted to read-only roles: the direct path is read-only-only.
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan()
+    planner.batch_action = ro_two_task_plan()
     runner = FakeRunner({"a": WorkerRunResult(status="VERIFIED"),
                          "b": WorkerRunResult(status="VERIFIED")})
     barrier = threading.Event()
@@ -397,7 +467,7 @@ def test_08_two_independent_workers_concurrent(tmp_path):
 
     t = threading.Thread(target=_watcher)
     t.start()
-    reason = dispatcher.run_batch("batch-001")
+    reason = dispatch(store, protocol, runner)
     t.join(timeout=5)
     assert started.is_set(), "both independent tasks never ran together"
     assert runner.max_concurrent == 2
@@ -406,36 +476,36 @@ def test_08_two_independent_workers_concurrent(tmp_path):
 
 def test_09_dependent_worker_waits(tmp_path):
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan(
+    planner.batch_action = ro_two_task_plan(
         delegations=[
-            schemas.DelegationSpec(id="a", role="implementer",
+            schemas.DelegationSpec(id="a", role="codebase-investigator",
                                    objective="core", owned_files=["core.py"]),
-            schemas.DelegationSpec(id="b", role="test-author",
-                                   objective="tests",
+            schemas.DelegationSpec(id="b", role="ui-reviewer",
+                                   objective="review",
                                    owned_files=["tests/core.py"], deps=["a"]),
         ]
     )
     runner = FakeRunner({"a": WorkerRunResult(status="VERIFIED"),
                          "b": WorkerRunResult(status="VERIFIED")})
-    store, protocol, dispatcher = chain(tmp_path, planner, runner)
+    store, protocol, _ = chain(tmp_path, planner, runner)
     protocol.request_clarify()
     protocol.record_user_answer("go")
     protocol.request_batch()
-    reason = dispatcher.run_batch("batch-001")
+    reason = dispatch(store, protocol, runner)
     assert runner.started.index("a") < runner.started.index("b")
     assert reason == "ALL_REQUIRED_DELEGATIONS_COMPLETE"
 
 
 def test_10_p13_shared_file_serialization(tmp_path):
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan(
+    planner.batch_action = ro_two_task_plan(
         parallelism=4,
         delegations=[
-            schemas.DelegationSpec(id="a", role="implementer",
+            schemas.DelegationSpec(id="a", role="codebase-investigator",
                                    objective="x", owned_files=["shared.py"]),
-            schemas.DelegationSpec(id="b", role="implementer",
+            schemas.DelegationSpec(id="b", role="ui-reviewer",
                                    objective="y", owned_files=["shared.py"]),
-            schemas.DelegationSpec(id="c", role="implementer",
+            schemas.DelegationSpec(id="c", role="adversarial-reviewer",
                                    objective="z", owned_files=["shared.py"]),
         ],
     )
@@ -447,7 +517,7 @@ def test_10_p13_shared_file_serialization(tmp_path):
     barrier = threading.Event()
     runner.barrier = barrier
 
-    store, protocol, dispatcher = chain(tmp_path, planner, runner)
+    store, protocol, _ = chain(tmp_path, planner, runner)
     protocol.request_clarify()
     protocol.record_user_answer("go")
     protocol.request_batch()
@@ -478,7 +548,7 @@ def test_10_p13_shared_file_serialization(tmp_path):
 
     t = threading.Thread(target=_watcher)
     t.start()
-    dispatcher.run_batch("batch-001")
+    dispatch(store, protocol, runner)
     t.join(timeout=5)
     assert runner.max_concurrent <= 1, (
         "shared-file tasks were never serialized: "
@@ -488,10 +558,13 @@ def test_10_p13_shared_file_serialization(tmp_path):
 
 def test_13_worker_limit_enforced(tmp_path):
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan(
+    planner.batch_action = ro_two_task_plan(
         parallelism=2,
         delegations=[
-            schemas.DelegationSpec(id=f"t{i}", role="implementer",
+            schemas.DelegationSpec(id=f"t{i}",
+                                   role=["codebase-investigator", "ui-reviewer",
+                                         "adversarial-reviewer",
+                                         "codebase-investigator"][i],
                                    objective=f"task {i}",
                                    owned_files=[f"mod{i}.py"])
             for i in range(4)
@@ -500,7 +573,7 @@ def test_13_worker_limit_enforced(tmp_path):
     runner = FakeRunner({f"t{i}": WorkerRunResult(status="VERIFIED") for i in range(4)})
     barrier = threading.Event()
     runner.barrier = barrier
-    store, protocol, dispatcher = chain(tmp_path, planner, runner)
+    store, protocol, _ = chain(tmp_path, planner, runner)
     protocol.request_clarify()
     protocol.record_user_answer("go")
     protocol.request_batch()
@@ -516,7 +589,7 @@ def test_13_worker_limit_enforced(tmp_path):
 
     t = threading.Thread(target=_watcher)
     t.start()
-    dispatcher.run_batch("batch-001")
+    dispatch(store, protocol, runner)
     t.join(timeout=8)
     # concurrency_limit=2 (clamped from parallelism=2 by P13 cap): never 3+
     assert runner.max_concurrent <= 2
@@ -529,6 +602,8 @@ def test_13_worker_limit_enforced(tmp_path):
 
 
 def test_11_unknown_role_rejected(tmp_path):
+    """Unknown roles fail closed in the P16 classifier BEFORE dispatch —
+    same ValueError contract as P14's role lowering, now at the guard."""
     planner = CountingPlanner()
     planner.batch_action = two_task_plan(
         delegations=[
@@ -582,7 +657,7 @@ RAW_TRANSCRIPT = "SECRET-TRANSCRIPT-DO-NOT-LEAK " * 40
 
 def test_16_raw_transcript_absent_from_batch_outcome(tmp_path):
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan()
+    planner.batch_action = ro_two_task_plan()
     runner = FakeRunner({
         "a": WorkerRunResult(status="VERIFIED", conclusion="ok",
                              raw={"transcript": RAW_TRANSCRIPT}),
@@ -631,22 +706,22 @@ def test_17_oversized_result_compressed_deterministically(tmp_path):
 
 
 def test_18_required_failure_escalates_not_endless(tmp_path):
+    """P16-retargeted: a FAILED read-only task escalates via the reentry
+    gate — it NEVER gains a mutating repair. The direct dispatch path is
+    built with max_fixers=0: no fixer may spawn, no endless retry; the
+    dependent is deterministically CANCELLED."""
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan(
+    planner.batch_action = ro_two_task_plan(
         delegations=[
-            schemas.DelegationSpec(id="a", role="implementer",
+            schemas.DelegationSpec(id="a", role="codebase-investigator",
                                    objective="x", owned_files=["x.py"]),
-            schemas.DelegationSpec(id="b", role="implementer",
+            schemas.DelegationSpec(id="b", role="ui-reviewer",
                                    objective="y", owned_files=["y.py"],
                                    deps=["a"]),
         ]
     )
     runner = FakeRunner({
-        "a": WorkerRunResult(status="FAILED", conclusion="core broken"),
-        "a-fix-1": WorkerRunResult(status="FAILED", conclusion="fixer 1 broke"),
-        "a-fix-2": WorkerRunResult(status="FAILED", conclusion="fixer 2 broke"),
-        "a-fix-3": WorkerRunResult(status="FAILED", conclusion="fixer 3 broke"),
-        "b": WorkerRunResult(status="VERIFIED"),
+        "a": WorkerRunResult(status="FAILED", conclusion="review crashed"),
     })
     store, protocol, _ = chain(tmp_path, planner, runner)
     protocol.request_clarify()
@@ -655,21 +730,22 @@ def test_18_required_failure_escalates_not_endless(tmp_path):
     reason = dispatcher_run(store, protocol, runner)
     assert reason == "BATCH_FAILED_WITH_ESCALATION"
     executed = set(runner.started)
-    # Bounded: exactly the original + 3 fixers, no fourth fixer.
-    assert "a-fix-3" in executed
-    assert "a-fix-4" not in executed
-    # Dependent b was deterministically cancelled (blocked by exhausted
-    # failure), never executed.
+    # No fixer spawning on the P16 direct path: the original attempted
+    # once, and no *-fix-* id was ever executed.
+    assert "a" in executed
+    assert not any(t.startswith("a-fix-") for t in executed)
+    # Dependent b was deterministically cancelled (blocked by the failed
+    # dependency), never executed.
     assert "b" not in executed
     statuses = store.load_worker_outcomes("p14-proj", "batch-001")
     assert statuses["b"].status == "CANCELLED"
+    assert not any(tid.startswith("a-fix-") for tid in statuses)
 
 
 def dispatcher_run(store, protocol, runner):
-    dispatcher = BatchDispatcher(
-        store, "p14-proj", runner=runner, protocol=protocol, workdir="/tmp"
-    )
-    return dispatcher.run_batch("batch-001")
+    """P16: batches dispatch through the authority entry point (direct
+    path is read-only-only, max_fixers=0)."""
+    return dispatch(store, protocol, runner)
 
 
 # ---------------------------------------------------------------------------
@@ -679,18 +755,18 @@ def dispatcher_run(store, protocol, runner):
 
 def test_19_needs_human_parks(tmp_path):
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan()
+    planner.batch_action = ro_two_task_plan()
     planner.reentry_actions = [
         schemas.NeedsHuman(question="Which architecture should we use?",
                            options=["A", "B"])
     ]
     runner = FakeRunner({"a": WorkerRunResult(status="VERIFIED"),
                          "b": WorkerRunResult(status="VERIFIED")})
-    store, protocol, dispatcher = chain(tmp_path, planner, runner)
+    store, protocol, _ = chain(tmp_path, planner, runner)
     protocol.request_clarify()
     protocol.record_user_answer("go")
     protocol.request_batch()
-    dispatcher.run_batch("batch-001")
+    dispatch(store, protocol, runner)
     action = protocol.request_reentry("batch-001")
     assert isinstance(action, schemas.NeedsHuman)
     assert protocol.state() is schemas.CloudProjectState.NEEDS_HUMAN
@@ -704,18 +780,18 @@ def test_19_needs_human_parks(tmp_path):
 
 def test_20_final_completes(tmp_path):
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan()
+    planner.batch_action = ro_two_task_plan()
     planner.reentry_actions = [
         schemas.FinalResult(success=True, summary="all done",
                             artifacts=["core.py"])
     ]
     runner = FakeRunner({"a": WorkerRunResult(status="VERIFIED"),
                          "b": WorkerRunResult(status="VERIFIED")})
-    store, protocol, dispatcher = chain(tmp_path, planner, runner)
+    store, protocol, _ = chain(tmp_path, planner, runner)
     protocol.request_clarify()
     protocol.record_user_answer("go")
     protocol.request_batch()
-    dispatcher.run_batch("batch-001")
+    dispatch(store, protocol, runner)
     action = protocol.request_reentry("batch-001")
     assert isinstance(action, schemas.FinalResult)
     assert protocol.state() is schemas.CloudProjectState.COMPLETE
@@ -724,15 +800,15 @@ def test_20_final_completes(tmp_path):
 
 def test_21_complete_cannot_invoke_cloud(tmp_path):
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan()
+    planner.batch_action = ro_two_task_plan()
     planner.reentry_actions = [schemas.FinalResult(success=True, summary="done")]
     runner = FakeRunner({"a": WorkerRunResult(status="VERIFIED"),
                          "b": WorkerRunResult(status="VERIFIED")})
-    store, protocol, dispatcher = chain(tmp_path, planner, runner)
+    store, protocol, _ = chain(tmp_path, planner, runner)
     protocol.request_clarify()
     protocol.record_user_answer("go")
     protocol.request_batch()
-    dispatcher.run_batch("batch-001")
+    dispatch(store, protocol, runner)
     protocol.request_reentry("batch-001")
     for bad_call in (protocol.request_batch, protocol.request_clarify):
         with pytest.raises(CloudInvocationBlocked):
@@ -764,7 +840,7 @@ class CrashRunner(FakeRunner):
 
 def test_22_restart_no_duplicate_work_or_cloud_calls(tmp_path):
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan()
+    planner.batch_action = ro_two_task_plan()
     planner.reentry_actions = [schemas.FinalResult(success=True, summary="done")]
     store = make_store(tmp_path)
     store.create_project(make_contract())
@@ -782,10 +858,8 @@ def test_22_restart_no_duplicate_work_or_cloud_calls(tmp_path):
         "a": WorkerRunResult(status="VERIFIED"),
         "b": RuntimeError("crash"),
     })
-    d1 = BatchDispatcher(store, "p14-proj", runner=crashy,
-                         protocol=protocol, workdir="/tmp")
     with pytest.raises(Exception):
-        d1.run_batch("batch-001")
+        dispatch(store, protocol, crashy)
     # 'a' is persisted terminal; 'b' is not.
     outcomes = store.load_worker_outcomes("p14-proj", "batch-001")
     assert "a" in outcomes
@@ -797,9 +871,7 @@ def test_22_restart_no_duplicate_work_or_cloud_calls(tmp_path):
     protocol2 = CloudProtocol(store, "p14-proj", planner2)
     assert protocol2.state() is schemas.CloudProjectState.BATCH_RUNNING
     good = FakeRunner({"b": WorkerRunResult(status="VERIFIED")})
-    d2 = BatchDispatcher(store, "p14-proj", runner=good,
-                         protocol=protocol2, workdir="/tmp")
-    reason = d2.run_batch("batch-001")
+    reason = dispatch(store, protocol2, good)
     # 'a' was NOT re-executed after restart (loaded from persisted state).
     assert good.started == ["b"]
     assert reason == "ALL_REQUIRED_DELEGATIONS_COMPLETE"
@@ -811,21 +883,15 @@ def test_22_restart_no_duplicate_work_or_cloud_calls(tmp_path):
         protocol2.request_reentry("batch-001")
 
 
-def test_22b_restart_does_not_reexecute_terminal_fixers(tmp_path):
-    """Worker-A defect 1 regression: a fixer that reached a TERMINAL
-    status before a crash must not be re-executed after resume, and the
-    P13 max-3 fixer budget must NOT reset across the restart (plan.json
-    never contains runtime-spawned fixers; they must be rehydrated from
-    persisted worker outcomes)."""
+def test_22b_crash_resume_does_not_reexecute_terminal_read_only(tmp_path):
+    """P16-retargeted (was: terminal-FIXER re-execution/budget regression).
+    The direct path is read-only-only with max_fixers=0, so the fixer
+    budget is N/A there; what MUST still hold across a crash-resume of a
+    READ-ONLY batch: terminal outcomes already persisted (even FAILED)
+    are never re-executed, a never-run sibling IS executed, and a
+    terminal failure still escalates instead of retrying forever."""
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan(
-        delegations=[
-            schemas.DelegationSpec(id="a", role="implementer",
-                                   objective="x", owned_files=["a.py"]),
-            schemas.DelegationSpec(id="b", role="test-author",
-                                   objective="t", owned_files=["tb.py"]),
-        ]
-    )
+    planner.batch_action = ro_two_task_plan()
     store = make_store(tmp_path)
     store.create_project(make_contract())
     protocol = CloudProtocol(store, "p14-proj", planner)
@@ -833,48 +899,46 @@ def test_22b_restart_does_not_reexecute_terminal_fixers(tmp_path):
     protocol.record_user_answer("go")
     protocol.request_batch()
 
-    # Simulate PRE-CRASH progress persisted to disk: a FAILED, and its
-    # fixers a-fix-1..a-fix-3 all ran and FAILED (the whole budget), while
-    # independent sibling b never ran. State is still BATCH_RUNNING (the
-    # crash happened before the reentry gate was marked).
-    for tid, role in [("a", "implementer"), ("a-fix-1", "fixer"),
-                      ("a-fix-2", "fixer"), ("a-fix-3", "fixer")]:
-        store.save_worker_outcome("p14-proj", "batch-001",
-                                  schemas.WorkerOutcome(delegation_id=tid,
-                                                        role=role,
-                                                        status="FAILED",
-                                                        conclusion=f"{tid} failed"))
+    # PRE-CRASH progress persisted to disk: a FAILED (terminal) while
+    # sibling b never ran. State is still BATCH_RUNNING (the crash
+    # happened before the reentry gate was marked).
+    store.save_worker_outcome(
+        "p14-proj", "batch-001",
+        schemas.WorkerOutcome(delegation_id="a", role="codebase-investigator",
+                              status="FAILED", conclusion="a failed"))
 
-    # RESTART: fresh protocol + dispatcher, same store. The budget is
-    # exhausted pre-crash, so no a-fix-4 may be spawned and no terminal
-    # fixer may be re-run.
+    # RESTART: fresh protocol + fresh dispatch, same store.
     planner2 = CountingPlanner()
     planner2.reentry_actions = [schemas.NeedsHuman(question="escalate?")]
     protocol2 = CloudProtocol(store, "p14-proj", planner2)
     assert protocol2.state() is schemas.CloudProjectState.BATCH_RUNNING
     runner = FakeRunner({"b": WorkerRunResult(status="VERIFIED")})
-    d2 = BatchDispatcher(store, "p14-proj", runner=runner,
-                         protocol=protocol2, workdir="/tmp")
-    reason = d2.run_batch("batch-001")
-    # No fixer re-executed, no a-fix-4 spawned; only sibling b ran.
+    reason = dispatch(store, protocol2, runner)
+    # The terminal FAILED outcome was not re-executed; only sibling b ran;
+    # and no fixer exists anywhere (the direct path cannot spawn one).
     assert "a" not in runner.started
     assert not any(t.startswith("a-fix-") for t in runner.started), runner.started
     assert runner.started == ["b"]
-    # Budget held across the restart: exhaustion persists as escalation.
+    # Pre-crash failure still holds across the restart: escalation.
     assert reason == "BATCH_FAILED_WITH_ESCALATION"
     assert protocol2.state() is schemas.CloudProjectState.REENTRY_READY
+    outcomes = store.load_worker_outcomes("p14-proj", "batch-001")
+    assert outcomes["a"].status == "FAILED"
+    assert not any(tid.startswith("a-fix-") for tid in outcomes)
 
 
-def test_22c_restart_preserves_verified_fixer_promotion(tmp_path):
-    """Companion to 22b: a fixer that reached VERIFIED before a crash must
-    still promote its original after resume (otherwise the 'fixed' task
-    would be treated as FAILED and a redundant fixer spawned)."""
+def test_22c_crash_resume_unblocks_dependents_of_terminal_verified(tmp_path):
+    """P16-retargeted companion to 22b (was: VERIFIED-fixer promotion
+    across a crash). The promoted slot is exactly the terminal-VERIFIED
+    read-only outcome: a persisted VERIFIED must SATISFY its dependents
+    across the restart (otherwise the dependent would be blocked or the
+    original redundantly re-run)."""
     planner = CountingPlanner()
-    planner.batch_action = two_task_plan(
+    planner.batch_action = ro_two_task_plan(
         delegations=[
-            schemas.DelegationSpec(id="a", role="implementer",
+            schemas.DelegationSpec(id="a", role="codebase-investigator",
                                    objective="x", owned_files=["a.py"]),
-            schemas.DelegationSpec(id="b", role="test-author",
+            schemas.DelegationSpec(id="b", role="ui-reviewer",
                                    objective="t", owned_files=["tb.py"], deps=["a"]),
         ]
     )
@@ -885,37 +949,74 @@ def test_22c_restart_preserves_verified_fixer_promotion(tmp_path):
     protocol.record_user_answer("go")
     protocol.request_batch()
 
-    # PRE-CRASH: a FAILED, then a-fix-1 VERIFIED (persisted), crash before
-    # the promotion/reentry ran. b (dependent on a) never ran.
+    # PRE-CRASH: a VERIFIED (persisted), crash before the reentry gate
+    # ran. b (dependent on a) never ran.
     store.save_worker_outcome("p14-proj", "batch-001",
                               schemas.WorkerOutcome(delegation_id="a",
-                                                    role="implementer",
-                                                    status="FAILED",
-                                                    conclusion="a broken"))
-    store.save_worker_outcome("p14-proj", "batch-001",
-                              schemas.WorkerOutcome(delegation_id="a-fix-1",
-                                                    role="fixer",
+                                                    role="codebase-investigator",
                                                     status="VERIFIED",
-                                                    conclusion="a fixed"))
+                                                    conclusion="a done"))
 
     planner2 = CountingPlanner()
     planner2.reentry_actions = [schemas.FinalResult(success=True, summary="done")]
     protocol2 = CloudProtocol(store, "p14-proj", planner2)
     runner = FakeRunner({
         "b": WorkerRunResult(status="VERIFIED"),
-        "a-fix-2": WorkerRunResult(status="VERIFIED"),  # must NOT be used
     })
-    d2 = BatchDispatcher(store, "p14-proj", runner=runner,
-                         protocol=protocol2, workdir="/tmp")
-    reason = d2.run_batch("batch-001")
-    # The pre-crash VERIFIED fixer promoted a -> VERIFIED, so b (its
-    # dependent) ran; no redundant a-fix-2 was spawned, and a / a-fix-1
-    # were not re-executed.
+    reason = dispatch(store, protocol2, runner)
+    # The pre-crash VERIFIED outcome satisfied b's dependency, so b (its
+    # dependent) ran; a was not re-executed.
     assert "a" not in runner.started
-    assert "a-fix-1" not in runner.started
-    assert "a-fix-2" not in runner.started
     assert runner.started == ["b"]
     assert reason == "ALL_REQUIRED_DELEGATIONS_COMPLETE"
+    outcomes = store.load_worker_outcomes("p14-proj", "batch-001")
+    assert outcomes["a"].status == "VERIFIED"
+    assert outcomes["b"].status == "VERIFIED"
+
+
+def test_22d_fixer_rehydration_mechanism_retained_for_p18(tmp_path):
+    """The P13 fixer mechanism stays in the dispatcher for the P18
+    authority-execution integration, but it is UNREACHABLE from the P16
+    direct path — so it is kept with a focused unit test that drives
+    _rehydrate_fixers directly (hand-constructed P13 DelegationPlan +
+    persisted fixer outcomes, never through run_batch): crash-resume
+    restores the budget counting and the promotion shells."""
+    plan = two_task_plan(
+        delegations=[
+            schemas.DelegationSpec(id="a", role="implementer",
+                                   objective="x", owned_files=["a.py"]),
+        ]
+    )
+    delegation = build_delegation_plan(plan, base_sha="a" * 40, workdir="/tmp")
+    outcomes = {
+        "a": schemas.WorkerOutcome(delegation_id="a", role="implementer",
+                                   status="FAILED", conclusion="a broken"),
+        "a-fix-1": schemas.WorkerOutcome(delegation_id="a-fix-1", role="fixer",
+                                         status="FAILED", conclusion="still broken"),
+        "a-fix-2": schemas.WorkerOutcome(delegation_id="a-fix-2", role="fixer",
+                                         status="VERIFIED", conclusion="a fixed"),
+    }
+    statuses = {tid: TaskStatus(wo.status) for tid, wo in outcomes.items()}
+
+    store = make_store(tmp_path)
+    store.create_project(make_contract())
+    d = BatchDispatcher(store, "p14-proj", runner=FakeRunner({}), workdir="/tmp")
+    d._rehydrate_fixers(delegation, plan, outcomes, statuses)
+
+    ids = {t.id for t in delegation.tasks}
+    assert {"a-fix-1", "a-fix-2"} <= ids  # shells restored
+    by_id = {t.id: t for t in delegation.tasks}
+    assert by_id["a-fix-2"].worker_role == "fixer"
+    assert statuses["a-fix-2"] is TaskStatus.VERIFIED
+    # P13 spawn_fixer budget counting sees them: the NEXT fixer is #3.
+    by_id["a"].status = TaskStatus.FAILED
+    nxt = spawn_fixer(delegation, "a", "regression after rehydration probe",
+                      max_fixers=3)
+    assert nxt.id == "a-fix-3"
+    # Fixer-takes-the-slot promotion shell restored: the pre-crash
+    # VERIFIED fixer promotes its original.
+    d._promote_fixer_results(delegation, statuses)
+    assert statuses["a"] is TaskStatus.VERIFIED
 
 
 # ---------------------------------------------------------------------------

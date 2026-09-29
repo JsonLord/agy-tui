@@ -15,10 +15,15 @@ Layout (under ``<state_root>/projects/<project_id>/``)::
           <delegation>.json         compact WorkerOutcome (cloud-facing)
           <delegation>.raw.json     raw local evidence (NEVER cloud-facing)
         outcome.json                compact BatchOutcome (<= 16 KB)
-        reentry.json                deterministic reentry decision + the
-                                    persisted generation/call counter that
-                                    enforces at-most-one cloud call per
-                                    reentry generation across restarts
+      reentry.json                deterministic reentry decision + the
+                                  persisted generation/call counter that
+                                  enforces at-most-one cloud call per
+                                  reentry generation across restarts
+    authority/
+      <batch>-lowering.json       P16 lowering record (ONE per batch,
+                                  reused idempotently on resume — never
+                                  re-lowered; carries plan_id + the
+                                  canonical CheckpointPlan intent dict)
 
 All writes go through the existing atomic helper
 ``app.orchestration.agy_runstate._atomic_write_json`` (reused, not
@@ -243,6 +248,70 @@ class ProjectStore:
         _write(
             self.batch_dir(project_id, batch_id) / "reentry.json", record
         )
+
+    # -- P16: authority lowering records (checkpoint-routed intents) ------------
+
+    def authority_dir(self, project_id: str) -> Path:
+        return self.project_dir(project_id) / "authority"
+
+    def save_lowered_intent(
+        self, project_id: str, batch_id: str, record: dict
+    ) -> Path:
+        """Atomically persist ONE lowering record per batch at
+        ``authority/<batch_id>-lowering.json``. The record is the durable
+        lowering intent (carries ``plan_id`` + the checkpoint plan dict);
+        resume reuses it and NEVER re-lowers.
+
+        Conflict rule (review H-6): a lowering is per-batch-CONTENT. If a
+        record already exists with a DIFFERENT ``content_hash`` or
+        ``plan_id``, the save is refused (:class:`ProjectStoreError`)
+        rather than silently overwriting an intent that may have already
+        been human-submitted. An identical re-save is an idempotent
+        refresh."""
+        adir = self.authority_dir(project_id)
+        adir.mkdir(parents=True, exist_ok=True)
+        path = adir / f"{safe_name(batch_id)}-lowering.json"
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise ProjectStoreError(f"lowered intent invalid: {exc}") from exc
+            if not isinstance(existing, dict):
+                raise ProjectStoreError("lowered intent must be an object")
+            if (
+                existing.get("content_hash")
+                and record.get("content_hash")
+                and existing.get("content_hash") != record.get("content_hash")
+            ):
+                raise ProjectStoreError(
+                    "lowered intent content mismatch — refusing to "
+                    "overwrite a stale intent"
+                )
+            if (
+                existing.get("plan_id")
+                and record.get("plan_id")
+                and existing.get("plan_id") != record.get("plan_id")
+            ):
+                raise ProjectStoreError(
+                    "lowered intent plan_id mismatch — refusing to "
+                    "overwrite a stale intent"
+                )
+        return _write(path, record)
+
+    def load_lowered_intent(self, project_id: str, batch_id: str) -> dict:
+        """The persisted lowering record, or ``{}`` when absent. Malformed
+        documents raise :class:`ProjectStoreError` (fail closed — a
+        corrupt lowering record must never be silently re-lowered)."""
+        path = self.authority_dir(project_id) / f"{safe_name(batch_id)}-lowering.json"
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ProjectStoreError(f"lowered intent invalid: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ProjectStoreError("lowered intent must be an object")
+        return data
 
     # -- P15: durable human answers (provenance of record) ---------------------
 
