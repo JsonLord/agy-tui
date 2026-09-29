@@ -91,6 +91,37 @@ def build_checkpoint_parser() -> argparse.ArgumentParser:
         default="state",
         help="canonical state root (default: ./state)",
     )
+
+    admit = sub.add_parser(
+        "admit",
+        help="admit a validated P12 continuation through the canonical "
+             "G0 APPROVE path (thin wrapper over the admission service; "
+             "admission only — no gate dispatch, no model calls)",
+    )
+    admit.add_argument("--plan-id", required=True, help="plan id")
+    admit.add_argument(
+        "--request-id",
+        required=True,
+        help="source HumanPlannerInputRequest id (the continuation "
+             "artifact name under plans/<plan-id>/continuations/)",
+    )
+    admit.add_argument(
+        "--revision",
+        type=int,
+        required=True,
+        help="G0 approval revision — must equal the continuation revision "
+             "(the service fails closed on a mismatch)",
+    )
+    admit.add_argument(
+        "--approver",
+        default="human:cli",
+        help="who is approving (default: human:cli)",
+    )
+    admit.add_argument(
+        "--state-root",
+        default="state",
+        help="canonical state root (default: ./state)",
+    )
     return parser
 
 
@@ -119,7 +150,44 @@ def checkpoint_main(argv: list[str]) -> int:
         return 0
     if args.checkpoint_command == "decide":
         return _checkpoint_decide(args)
+    if args.checkpoint_command == "admit":
+        return _checkpoint_admit(args)
     return 2  # pragma: no cover - argparse required=True guards this
+
+
+def _checkpoint_admit(args) -> int:
+    """`checkpoint admit` — canonical G0 admission of a validated
+    continuation (P13). Thin wrapper: the ENTIRE admission (provenance
+    check, re-validation, duplicate detection, submission) lives in the
+    admission service; this CLI only parses and reports. Exit 0 on
+    admitted/idempotent, 1 on any fail-closed rejection."""
+    from datetime import datetime, timezone
+
+    from app.orchestration.checkpoint_planning.continuation_admission import (
+        ContinuationAdmissionError,
+        admit_continuation,
+    )
+    from app.orchestration.checkpoint_planning.schemas import G0Approval
+
+    approval = G0Approval(
+        decision="APPROVE",
+        revision=args.revision,
+        approver=args.approver,
+        approved_at=datetime.now(timezone.utc).isoformat(),
+    )
+    try:
+        result = admit_continuation(
+            args.state_root, args.plan_id, args.request_id, g0_approval=approval
+        )
+    except ContinuationAdmissionError as exc:
+        print(f"checkpoint admit failed: {exc}", file=sys.stderr)
+        return 1
+    suffix = " (idempotent re-admission)" if result.idempotent else ""
+    print(
+        f"admitted {args.plan_id} (request {args.request_id}, "
+        f"revision {result.revision}): next gate {result.next_gate}{suffix}"
+    )
+    return 0
 
 
 def _decisions_ledger_max(human_dir) -> int:
