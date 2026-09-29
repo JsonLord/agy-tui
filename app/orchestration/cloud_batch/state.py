@@ -33,7 +33,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.orchestration.agy_runstate import _atomic_write_json, safe_name
 from app.orchestration.cloud_batch.schemas import (
@@ -41,11 +41,14 @@ from app.orchestration.cloud_batch.schemas import (
     BatchPlan,
     CloudAction,
     CloudProjectState,
+    HumanResponse,
     ProjectContract,
     WorkerOutcome,
 )
 
 _CLOUD_FILE_RE = re.compile(r"^(\d{4})-(clarify|batch|needs_human|final)\.json$")
+_P15_ANSWER_FILE_RE = re.compile(r"^(\d{4})-(clarify|needs_human)\.json$")
+_HUMAN_ANSWER_KINDS = ("clarify", "needs_human")
 
 
 def _jsonable(payload: Any) -> Any:
@@ -240,6 +243,102 @@ class ProjectStore:
         _write(
             self.batch_dir(project_id, batch_id) / "reentry.json", record
         )
+
+    # -- P15: durable human answers (provenance of record) ---------------------
+
+    def answers_dir(self, project_id: str) -> Path:
+        return self.project_dir(project_id) / "answers"
+
+    def next_answer_seq(self, project_id: str) -> int:
+        """1-based next answer artifact number (restart-safe: derived from
+        existing files, never from process-local state — same convention
+        as :meth:`next_cloud_seq`)."""
+        adir = self.answers_dir(project_id)
+        if not adir.is_dir():
+            return 1
+        seqs: list[int] = []
+        for p in adir.iterdir():
+            m = _P15_ANSWER_FILE_RE.fullmatch(p.name)
+            if m:
+                seqs.append(int(m.group(1)))
+        return max(seqs, default=0) + 1
+
+    def latest_cloud_seq_for_mode(self, project_id: str, mode: str) -> int:
+        """Highest persisted ``NNNN-<mode>.json`` cloud artifact sequence
+        (0 when none exists). The NEEDS_HUMAN park generation for P15
+        answer binding is exactly this number."""
+        cdir = self.cloud_dir(project_id)
+        if not cdir.is_dir():
+            return 0
+        seqs: list[int] = []
+        for p in cdir.iterdir():
+            m = _CLOUD_FILE_RE.fullmatch(p.name)
+            if m and m.group(2) == mode:
+                seqs.append(int(m.group(1)))
+        return max(seqs, default=0)
+
+    def save_human_response(
+        self, project_id: str, response: "HumanResponse", kind: str
+    ) -> Path:
+        """Persist ONE durable human response at
+        ``projects/<id>/answers/<seq:04d>-<kind>.json``.
+
+        ``kind`` is "clarify" | "needs_human". Monotonic seq is derived
+        from existing answer files (restart-safe, same convention as
+        ``next_cloud_seq``). The payload is (re)validated as a
+        :class:`HumanResponse` here — fail closed: hand-rolled JSON
+        without the ``human:`` actor never reaches disk. The written
+        file is the DURABLE record of human provenance (actor + origin
+        survive restarts) plus the park generation the response is
+        bound to (clarify: the single WAITING_FOR_USER episode == 1;
+        needs_human: the latest needs_human cloud artifact seq).
+        """
+        if kind not in _HUMAN_ANSWER_KINDS:
+            raise ProjectStoreError(f"unknown human answer kind {kind!r}")
+        try:
+            if isinstance(response, HumanResponse):
+                validated = HumanResponse.model_validate(response.model_dump())
+            elif isinstance(response, dict):
+                validated = HumanResponse.model_validate(response)
+            else:
+                raise ValueError(
+                    f"payload is not a HumanResponse: {type(response).__name__}"
+                )
+        except ValidationError as exc:
+            raise ProjectStoreError(f"human response invalid: {exc}") from exc
+        adir = self.answers_dir(project_id)
+        adir.mkdir(parents=True, exist_ok=True)
+        seq = self.next_answer_seq(project_id)
+        path = adir / f"{seq:04d}-{kind}.json"
+        payload = validated.model_dump(mode="json")
+        payload["kind"] = kind
+        payload["park_generation"] = (
+            1 if kind == "clarify"
+            else self.latest_cloud_seq_for_mode(project_id, "needs_human")
+        )
+        return _write(path, payload)
+
+    def load_human_responses(self, project_id: str, kind: str) -> list[dict]:
+        """All persisted human responses for (project, kind), oldest
+        first; ``[]`` when none. Malformed files are skipped (never
+        crash discovery)."""
+        if kind not in _HUMAN_ANSWER_KINDS:
+            raise ProjectStoreError(f"unknown human answer kind {kind!r}")
+        adir = self.answers_dir(project_id)
+        if not adir.is_dir():
+            return []
+        out: list[dict] = []
+        for p in sorted(adir.iterdir()):
+            m = _P15_ANSWER_FILE_RE.fullmatch(p.name)
+            if m is None or m.group(2) != kind:
+                continue
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue  # partial/garbage write is skipped, not fatal
+            if isinstance(data, dict):
+                out.append(data)
+        return out
 
     # -- enumeration helpers ------------------------------------------------------
 

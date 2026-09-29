@@ -46,6 +46,7 @@ from app.orchestration.cloud_batch.schemas import (
     CloudProjectState,
     DelegationSpec,
     FinalResult,
+    HumanResponse,
     NeedsHuman,
     ProjectContract,
     WorkerOutcome,
@@ -79,6 +80,14 @@ from app.orchestration.cloud_batch.dispatcher import (
     WorkerRunner,
     build_delegation_plan,
 )
+from app.orchestration.cloud_batch.human_bridge import (
+    DuplicateHumanResponse,
+    HumanBridgeError,
+    NotHumanOrigin,
+    ParkNotAwaiting,
+    park_view,
+    record_human_response,
+)
 
 __all__ = [
     "BATCH_OUTCOME_MAX_BYTES",
@@ -101,6 +110,7 @@ __all__ = [
     "CloudProjectState",
     "DelegationSpec",
     "FinalResult",
+    "HumanResponse",
     "NeedsHuman",
     "ProjectContract",
     "WorkerOutcome",
@@ -127,4 +137,10 @@ __all__ = [
     "OpenCodeWorkerRunner",
     "WorkerRunner",
     "build_delegation_plan",
+    "HumanBridgeError",
+    "NotHumanOrigin",
+    "ParkNotAwaiting",
+    "DuplicateHumanResponse",
+    "park_view",
+    "record_human_response",
 ]

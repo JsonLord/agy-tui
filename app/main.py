@@ -65,9 +65,17 @@ def build_checkpoint_parser() -> argparse.ArgumentParser:
     decide.add_argument("--checkpoint-id", required=True, help="checkpoint id")
     decide.add_argument(
         "--decision",
-        required=True,
+        required=False,
+        default=None,
         choices=("approve", "needs-changes", "cancel"),
-        help="the human verdict (argparse rejects anything else)",
+        help="the human verdict (argparse rejects anything else); omit it "
+             "with --interactive to be prompted (P15-A)",
+    )
+    decide.add_argument(
+        "--interactive",
+        action="store_true",
+        help="collect the verdict + VERBATIM feedback through the human "
+             "surface (only consulted when --decision is omitted)",
     )
     decide.add_argument(
         "--feedback",
@@ -122,6 +130,17 @@ def build_checkpoint_parser() -> argparse.ArgumentParser:
         default="state",
         help="canonical state root (default: ./state)",
     )
+
+    sub.add_parser(
+        "pending",
+        help="list every parked human action (G4 WAITING_FOR_HUMAN plans "
+             "and P14 parked cloud projects) from canonical state — "
+             "read-only, plain text (P15-A)",
+    ).add_argument(
+        "--state-root",
+        default="state",
+        help="canonical state root (default: ./state)",
+    )
     return parser
 
 
@@ -133,6 +152,8 @@ def checkpoint_main(argv: list[str]) -> int:
     ``decide`` (P12) is a THIN wrapper: it loads canonical state, builds
     the HumanGateRecord, and delegates the ENTIRE transition to the
     canonical G4Executor.apply_human_decision — no gate logic here.
+    ``pending`` (P15-A) is the read-only cross-surface discovery of every
+    parked human action (G4 + P14), rendered through the human surface.
     """
     from app.orchestration.checkpoint_planning.checkpoint_viewer import (
         CheckpointViewerError,
@@ -152,7 +173,29 @@ def checkpoint_main(argv: list[str]) -> int:
         return _checkpoint_decide(args)
     if args.checkpoint_command == "admit":
         return _checkpoint_admit(args)
+    if args.checkpoint_command == "pending":
+        return _checkpoint_pending(args)
     return 2  # pragma: no cover - argparse required=True guards this
+
+
+def _checkpoint_pending(args) -> int:
+    """`checkpoint pending` (P15-A) — every parked human action (G4
+    WAITING_FOR_HUMAN + P14 parked projects) rendered as plain text from
+    canonical state. Read-only; exit 1 on malformed canonical state."""
+    from app.orchestration.checkpoint_planning.checkpoint_viewer import (
+        CheckpointViewerError,
+        list_parked_human_actions,
+    )
+
+    from app.human_surface import render_pending
+
+    try:
+        entries = list_parked_human_actions(args.state_root)
+    except CheckpointViewerError as exc:
+        print(f"checkpoint pending failed: {exc}", file=sys.stderr)
+        return 1
+    print(render_pending(entries), end="")
+    return 0
 
 
 def _checkpoint_admit(args) -> int:
@@ -168,6 +211,14 @@ def _checkpoint_admit(args) -> int:
         admit_continuation,
     )
     from app.orchestration.checkpoint_planning.schemas import G0Approval
+
+    from app.human_surface import HumanAuthorityError, require_human_actor
+
+    try:
+        require_human_actor(args.approver)
+    except HumanAuthorityError as exc:
+        print(f"checkpoint admit failed: {exc}", file=sys.stderr)
+        return 1
 
     approval = G0Approval(
         decision="APPROVE",
@@ -203,6 +254,66 @@ def _decisions_ledger_max(human_dir) -> int:
     return latest
 
 
+def _collect_interactive_decision(args) -> int | None:
+    """`checkpoint decide --interactive` (P15-A): prompt the human on
+    stdin through the canonical pending payload.
+
+    The question + legal decisions are built EXACTLY as the canonical
+    ``G4Executor.wait`` does — ``wait`` runs on an in-memory deep copy of
+    the checkpoint's gate state, so it is a pure render (no transition,
+    no persistence, no I/O beyond the reader). Returns None to continue
+    into ``_checkpoint_decide`` (with ``args.decision`` /
+    ``args.feedback`` filled), or an exit code (1) when canonical state
+    is unusable or the human's input is invalid.
+    """
+    import copy
+
+    from app.orchestration.checkpoint_planning.checkpoint_viewer import (
+        CheckpointViewerError,
+        load_plan,
+    )
+    from app.orchestration.checkpoint_planning.g4_executor import (
+        build_live_g4_executor,
+    )
+    from app.orchestration.checkpoint_planning.gate_engine import (
+        GateTransitionError,
+    )
+
+    from app.human_surface import collect_g4_decision
+
+    try:
+        plan = load_plan(args.state_root, args.plan_id)
+        checkpoint = next(
+            (cp for cp in plan.checkpoints
+             if cp.checkpoint_id == args.checkpoint_id),
+            None,
+        )
+        if checkpoint is None:
+            print(
+                f"checkpoint decide failed: plan {args.plan_id!r} has no "
+                f"checkpoint {args.checkpoint_id!r}",
+                file=sys.stderr,
+            )
+            return 1
+        payload = build_live_g4_executor(args.state_root).wait(
+            copy.deepcopy(checkpoint), plan_id=plan.plan_id
+        )
+        decision, feedback = collect_g4_decision(
+            input, payload["question"], payload["legal_decisions"]
+        )
+    except (
+        CheckpointViewerError,
+        GateTransitionError,
+        ValueError,
+        EOFError,
+    ) as exc:
+        print(f"checkpoint decide failed: {exc}", file=sys.stderr)
+        return 1
+    args.decision = decision.value.lower().replace("_", "-")
+    args.feedback = feedback
+    return None
+
+
 def _checkpoint_decide(args) -> int:
     """`checkpoint decide` — canonical G4 human decision, thin wrapper."""
     import json
@@ -224,6 +335,19 @@ def _checkpoint_decide(args) -> int:
         HumanDecision,
         HumanGateRecord,
     )
+
+    # P15-A: --interactive may omit --decision; the verdict + VERBATIM
+    # feedback are collected through the human surface and then flow
+    # through the SAME path below (non-interactive behavior unchanged).
+    if args.decision is None:
+        if not args.interactive:
+            build_checkpoint_parser().error(
+                "the following arguments are required: --decision "
+                "(or pass --interactive to be prompted)"
+            )
+        exit_code = _collect_interactive_decision(args)
+        if exit_code is not None:
+            return exit_code
 
     decision = HumanDecision(args.decision.replace("-", "_").upper())
 

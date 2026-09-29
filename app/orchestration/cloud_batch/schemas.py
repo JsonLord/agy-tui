@@ -16,6 +16,7 @@ the P2 stage-DAG logic (P13 already delegates to ``DevelopmentPlan``).
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal, Union
 
@@ -56,6 +57,11 @@ REENTRY_REASONS = (
 )
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+#: P15 — a human actor id is exactly ``human:<lowercase id>``. Anything
+#: else (``model:*``, ``assistant:*``, bare ``human``, empty-suffix
+#: ``human:``) is REJECTED at the schema level, fail closed.
+_HUMAN_ACTOR_RE = re.compile(r"human:[a-z0-9_-]+")
 
 
 class CloudMode(str, Enum):
@@ -398,7 +404,61 @@ class ProjectContract(BaseModel):
         return self
 
 
+# ---------------------------------------------------------------------------
+# P15 — human-originated response (provenance is part of the data model)
+# ---------------------------------------------------------------------------
+
+
+class HumanResponse(BaseModel):
+    """A HUMAN-originated response to a parked cloud project.
+
+    Provenance is part of the data model: the response is only valid
+    if ``actor`` starts with exactly "human:" (schema-enforced, fail
+    closed) and ``origin`` names the human surface. A model-generated
+    payload can therefore never validate as a HumanResponse — this is
+    the non-negotiable invariant of this milestone. The response is
+    DATA for the deterministic resume path, never an instruction
+    channel: the text is stored VERBATIM.
+    """
+
+    text: str = Field(min_length=1)
+    actor: str = Field(min_length=7)
+    origin: Literal["tui", "cli", "remote"] = "cli"
+    submitted_at: str
+
+    @field_validator("text")
+    @classmethod
+    def _text_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("text must not be blank")
+        return value  # VERBATIM — never rewritten by the schema
+
+    @field_validator("actor")
+    @classmethod
+    def _actor_is_human(cls, value: str) -> str:
+        if not _HUMAN_ACTOR_RE.fullmatch(value):
+            raise ValueError(
+                "actor must fullmatch 'human:[a-z0-9_-]+' — a "
+                "model/assistant payload can never validate as a "
+                "HumanResponse (fail closed, no laundering)"
+            )
+        return value
+
+    @field_validator("submitted_at")
+    @classmethod
+    def _submitted_at_iso(cls, value: str) -> str:
+        value = (value or "").strip()
+        if not value:
+            raise ValueError("submitted_at is required (non-empty ISO-8601)")
+        try:
+            datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f"submitted_at is not ISO-8601: {value!r}") from exc
+        return value
+
+
 __all__ = [
+    "HumanResponse",
     "CORE_RULES_MAX_BYTES",
     "ROLE_MANIFEST_MAX_BYTES",
     "BATCH_PROMPT_MAX_BYTES",
