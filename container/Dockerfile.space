@@ -1,0 +1,23 @@
+# P21 — Hugging Face Space profile (layered on the P20 CPU image).
+#
+# Adds the auth-gated project-supervisor HTTP frontend (the ONE external
+# surface) and the space entrypoint. No HF-specific assumptions leak into
+# core: this only composes the generic P20 runtime.
+FROM agy-hybrid:rc
+
+COPY app/space_server.py app/space_server.py
+COPY app/space_persistence.py app/space_persistence.py
+COPY container/space-entrypoint.sh /opt/agy/space-entrypoint.sh
+RUN chmod +x /opt/agy/space-entrypoint.sh
+
+# HF Spaces serve the container on port 7860 (0.0.0.0). The OpenCode
+# worker backend stays on 127.0.0.1:4096 and is NEVER exposed publicly —
+# the space entrypoint binds the supervisor frontend to 0.0.0.0:7860 and
+# keeps the worker loopback-only.
+ENV AGY_BIND=0.0.0.0 \
+    AGY_PORT=7860 \
+    OPENCODE_BIND=127.0.0.1 \
+    OPENCODE_PORT=4096
+EXPOSE 7860
+
+ENTRYPOINT ["/opt/agy/space-entrypoint.sh"]
