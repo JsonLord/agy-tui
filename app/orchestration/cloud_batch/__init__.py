@@ -15,12 +15,22 @@ ONCE per reentry generation (next BATCH / NEEDS_HUMAN / FINAL).
 The cloud model never manages Todo state, never owns wait loops, and is
 never invoked by worker completion, progress events, or logs.
 
-Classification B interim posture (see state/autopilot/status.md,
-2026-09-29 P14 REASSIGNED): native AGY-CLI operational tool schemas
-cannot be proven hidden from the model; execution is gated by CLI
-permissions (headless auto-deny of unapproved tools, optional --sandbox,
-MCP server switches). DEFAULT WEBUI CUTOVER REMAINS BLOCKED until a true
-pre-execution (schema-level) restriction is proven. Interim defenses:
+Classification posture (P14 -> P17): P14 proved the native AGY-CLI
+transport is classification B — operational tool schemas cannot be
+proven hidden from the model; execution is gated by CLI permissions
+(headless auto-deny of unapproved tools, optional --sandbox, MCP server
+switches). DEFAULT WEBUI CUTOVER WAS BLOCKED until a true pre-execution
+(schema-level) restriction was proven. P17 resolves the isolation: the
+PRODUCTION planner transport is now the tool-free google-genai plain
+completion (:func:`app.orchestration.cloud_batch.planner.
+routed_tool_free_invoke` over ``TOOL_FREE_TIER_PRIORITY``) — a
+non-agentic API with no tool parameter at all, so isolation is
+structural (classification A). The CLI transport survives ONLY as the
+explicit restricted/experimental ``transport="agy_cli"`` opt-in
+(classification B, tool schemas visible). Cutover remains BLOCKED until
+the tool-free transport is LIVE-PROVEN with configured Gemini/Vertex
+credentials (currently absent on this host — BLOCKED-BY-CREDENTIALS,
+not blocked-by-upstream). Interim defenses for any restricted use:
 structured CloudAction envelope + fail-closed tool-event detection
 (:func:`app.orchestration.cloud_batch.protocol.scan_for_tool_events`).
 """
@@ -63,12 +73,15 @@ from app.orchestration.cloud_batch.planner import (
     CloudTierCapacityError,
     QuotaRouter,
     TIER_PRIORITY,
+    TOOL_FREE_TIER_PRIORITY,
     agy_cli_invoke,
     build_batch_prompt,
     build_clarify_prompt,
     build_reentry_prompt,
+    genai_tool_free_invoke,
     parse_cloud_action,
     routed_agy_invoke,
+    routed_tool_free_invoke,
 )
 from app.orchestration.cloud_batch.state import ProjectStore
 from app.orchestration.cloud_batch.dispatcher import (
@@ -133,8 +146,11 @@ __all__ = [
     "CloudTierCapacityError",
     "QuotaRouter",
     "TIER_PRIORITY",
+    "TOOL_FREE_TIER_PRIORITY",
     "agy_cli_invoke",
     "routed_agy_invoke",
+    "genai_tool_free_invoke",
+    "routed_tool_free_invoke",
     "build_batch_prompt",
     "build_clarify_prompt",
     "build_reentry_prompt",

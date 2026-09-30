@@ -425,7 +425,14 @@ def agy_cli_invoke(prompt: str, *, model: str | None = None) -> str:
     """One one-shot ``agy -p`` call. The CLI is the cloud connection
     (OAuth lives in the CLI profile); no credential touches this
     process. Raises CloudPlannerUnavailable with the raw stderr on a
-    non-zero exit (the tier router classifies it)."""
+    non-zero exit (the tier router classifies it).
+
+    P17: this is the RESTRICTED transport (classification B — tool
+    schemas remain visible to the model; the CLI soft-denies calls at
+    execution). It is no longer the default planner transport; use it
+    only via ``CloudPlanner(transport="agy_cli")`` when the tool-free
+    transport has no credentials configured.
+    """
     cmd = ["agy", f"-p={prompt}"]
     if model:
         cmd += ["--model", model, "--print-timeout", "300s"]
@@ -459,6 +466,187 @@ def agy_cli_invoke(prompt: str, *, model: str | None = None) -> str:
 def default_agy_invoke(prompt: str) -> str:
     """Legacy single-tier default (the CLI's own default model)."""
     return agy_cli_invoke(prompt)
+
+
+# ---------------------------------------------------------------------------
+# P17 — tool-free planner transport (classification A)
+# ---------------------------------------------------------------------------
+#
+# The google-genai SDK's ``models.generate_content`` is a PLAIN, non-agentic
+# completion call: its signature is (model, contents, config) and there is
+# no tools parameter, no MCP surface, no filesystem, and no shell — the
+# operational execution surface does not exist, it is not merely disabled
+# by config (unlike the AGY CLI, where tool schemas stay visible and calls
+# are soft-denied at execution — classification B). Tool isolation here is
+# a STRUCTURAL property of the API surface, proven by inspect in the P17
+# tests.
+#
+# The tool-free chain is Gemini/Vertex-ONLY: every tier in
+# :data:`TOOL_FREE_TIER_PRIORITY` is served by the same tool-free call, so
+# the quota fallback retains the same restriction (a tool-bearing tier
+# cannot enter the list without changing its transport, which this module
+# refuses by construction — ``routed_tool_free_invoke`` never references
+# the CLI transport). The P14 CLI chain (Gemini + Opus, classification B)
+# remains available ONLY as the explicit restricted/experimental
+# ``transport="agy_cli"`` opt-in, never as the default.
+#
+# Credentials: the Developer API key comes from ``GEMINI_API_KEY`` (or an
+# explicit ``api_key`` argument); Vertex ADC is picked up automatically by
+# the SDK. There is NO interactive OAuth on this path. When no credential
+# is configured every tier fails closed (CloudPlannerUnavailable) — the
+# planner never falls through to a tool-bearing transport silently.
+
+#: Tool-free (classification A) tier slugs: google-genai model IDs, NOT
+#: AGY-CLI slugs. All tiers share the same tool-free transport; ordering
+#: is priority (index 0 = primary). The fallback is a LARGER/FASTER Gemini
+#: flavor — never a tool-bearing model, per the P17 fallback rule.
+TOOL_FREE_TIER_PRIORITY: list[str] = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+]
+
+#: The single sanctioned tool-free call surface. P17 tests assert
+#: structurally (via inspect) that this call has no tools/MCP parameters.
+_GENAI_CALL_PARAMS: tuple[str, ...] = ("model", "contents", "config")
+
+
+def _genai_generate_content(
+    prompt: str, *, model: str, api_key: str | None
+) -> str:
+    """ONE plain google-genai completion call — no tools, no MCP, no
+    filesystem, no shell. Returns the raw text (the CloudAction JSON the
+    prompt builder demanded). Raises :class:`CloudPlannerUnavailable`
+    with the provider error text embedded so the tier router's existing
+    string classifiers (``RESOURCE_EXHAUSTED`` / ``UNAVAILABLE`` /
+    ``Resets in ...``) classify it unchanged.
+
+    Imported lazily (like the P14 ``_extract_json`` pattern): importing
+    ``google.genai`` at module top level would couple the whole
+    orchestration package to the SDK import cost.
+    """
+    try:
+        from google import genai  # lazy, per the module-import pattern
+        from google.genai import errors as genai_errors
+    except ImportError as exc:
+        raise CloudPlannerUnavailable(
+            "cloud planner unavailable: google-genai SDK not installed "
+            f"({exc})"
+        ) from exc
+    try:
+        client = genai.Client(api_key=api_key)  # None -> GEMINI_API_KEY / ADC
+        resp = client.models.generate_content(model=model, contents=prompt)
+    except genai_errors.APIError as exc:
+        # str(APIError) embeds "<code> <STATUS>. <response json>" — the
+        # quota/capacity classifiers match it verbatim.
+        raise CloudPlannerUnavailable(
+            f"cloud planner unavailable: genai transport error for model "
+            f"{model}: {exc}"
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - adapter boundary, fail closed
+        raise CloudPlannerUnavailable(
+            f"cloud planner unavailable: genai transport failure for model "
+            f"{model}: {exc}"
+        ) from exc
+    text = getattr(resp, "text", None)
+    if text is None or not str(text).strip():
+        raise CloudPlannerUnavailable(
+            f"cloud planner unavailable: genai returned no text for model "
+            f"{model} (candidates={len(getattr(resp, 'candidates', []) or [])})"
+        )
+    return str(text)
+
+
+def genai_tool_free_invoke(
+    prompt: str,
+    *,
+    model: str | None = None,
+    api_key: str | None = None,
+) -> str:
+    """One tool-free completion (the P17 transport). Matches the router
+    contract of :func:`agy_cli_invoke`: single prompt in, raw text out,
+    keyword-only ``model``, :class:`CloudPlannerUnavailable` with the
+    provider error text on any failure (the tier router classifies it).
+    """
+    return _genai_generate_content(
+        prompt, model=model or TOOL_FREE_TIER_PRIORITY[0], api_key=api_key
+    )
+
+
+def routed_tool_free_invoke(
+    router: QuotaRouter | None = None, *, api_key: str | None = None
+) -> Callable[[str], str]:
+    """Build the PRODUCTION invoke (P17 default): one tool-free genai
+    completion per attempt, trying tiers in :data:`TOOL_FREE_TIER_PRIORITY`
+    order.
+
+    * quota exhaustion (429) on a tier  -> parked (persisted) until its
+      advertised reset, next (also tool-free) tier tried for the SAME turn;
+    * no capacity (503) on a tier       -> transient, next tier tried;
+    * every tier fails                  -> CloudPlannerUnavailable
+      (fail closed — a plan is never fabricated, and a missing credential
+      never degrades into a tool-bearing transport).
+
+    ISOLATION INVARIANT (P17): this builder's ONLY transport is
+    :func:`genai_tool_free_invoke` (looked up as a module global at call
+    time, mirroring the monkey-patch surface tests 27–30 rely on on the
+    CLI path). It never references ``agy_cli_invoke`` — the fallback
+    transport cannot silently gain tools.
+    """
+    r = router if router is not None else QuotaRouter()
+    # ISOLATION INVARIANT (P17): the tool-free router may only ever carry
+    # tool-free (Gemini/Vertex plain-completion) tiers. If a caller hands
+    # in a router pre-configured with the CLI chain (e.g. a bare
+    # QuotaRouter(), which defaults to TIER_PRIORITY and carries the
+    # tool-bearing Opus slug), override it to the tool-free list so the
+    # fallback can NEVER silently reach a tool surface. An explicit
+    # custom tiers list is trusted (tests / a future Gemini-only set).
+    if r.tiers != list(TOOL_FREE_TIER_PRIORITY):
+        r.tiers = list(TOOL_FREE_TIER_PRIORITY)
+
+    def invoke(prompt: str) -> str:
+        last_error: str | None = None
+        tried: list[str] = []
+        while True:
+            try:
+                model = r.next_model()
+            except CloudPlannerUnavailable:
+                status = {s["model"]: s["status"] for s in r.tier_status()}
+                only_down = all(v == "down" for v in status.values())
+                detail = (
+                    f"tool-free transport tiers unavailable: {status} "
+                    f"(tried {tried}; last error: {last_error})"
+                )
+                if only_down:
+                    raise CloudTierCapacityError(
+                        "cloud planner unavailable (transient): " + detail
+                    ) from None
+                raise CloudPlannerUnavailable(
+                    "cloud planner unavailable: " + detail
+                ) from None
+            tried.append(model)
+            try:
+                raw = genai_tool_free_invoke(
+                    prompt, model=model, api_key=api_key
+                )
+            except CloudPlannerUnavailable as exc:
+                msg = str(exc)
+                last_error = msg
+                if _stderr_has_quota_exhausted(msg):
+                    r.record_exhausted(model, _quota_reset_seconds(msg))
+                    continue
+                if _stderr_has_capacity(msg):
+                    r.record_capacity(model)
+                    continue
+                raise
+            r.record_success(model)
+            return raw
+        # Unreachable: the loop either returns or raises.
+        raise CloudPlannerUnavailable(
+            f"cloud planner unavailable: no tool-free tier succeeded: "
+            f"{last_error} (tried {tried})"
+        )
+
+    return invoke
 
 
 def routed_agy_invoke(router: QuotaRouter | None = None) -> Callable[[str], str]:
@@ -546,13 +734,33 @@ class CloudPlanner:
         invoke: Callable[[str], str] | None = None,
         *,
         quota_router: QuotaRouter | None = None,
+        transport: str | None = None,
     ) -> None:
+        # P17 transport selection (production default is TOOL-FREE):
+        #   "tool_free" (default)  -> routed_tool_free_invoke over
+        #      TOOL_FREE_TIER_PRIORITY (google-genai plain completion;
+        #      classification A; Gemini/Vertex only; Gemini-preferred
+        #      quota parking retained).
+        #   "agy_cli" (restricted) -> routed_agy_invoke over TIER_PRIORITY
+        #      (the P14 classification-B CLI transport, including the
+        #      Opus fallback). Explicitly experimental — it keeps tool
+        #      schemas visible to the model; choose it only when no
+        #      tool-free credential is configured.
         if invoke is not None:
             self._invoke = invoke
             self.quota_router = None
         else:
             self.quota_router = quota_router
-            self._invoke = routed_agy_invoke(quota_router)
+            mode = transport or "tool_free"
+            if mode == "tool_free":
+                self._invoke = routed_tool_free_invoke(quota_router)
+            elif mode == "agy_cli":
+                self._invoke = routed_agy_invoke(quota_router)
+            else:
+                raise ValueError(
+                    f"unknown planner transport {mode!r} "
+                    "(expected 'tool_free' or 'agy_cli')"
+                )
 
     def _call(self, prompt: str) -> CloudAction:
         try:
