@@ -45,6 +45,7 @@ Also asserted:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -344,11 +345,15 @@ def test_budget_and_bytes_accounting(tmp_path):
         clarify_artifact = sorted(sup.store.cloud_dir(PROJECT).glob("*.json"))[0]
     clarify_bytes = len(clarify_artifact.read_text())
     assert clarify_bytes < 8000
-    return {
+    metrics = {
         "cloud_calls_per_project": len(planner.calls),
         "clarify_prompt_bytes": clarify_bytes,
         "batch_outcome_bytes": outcome_bytes,
     }
+    if os.environ.get("P22_METRICS_OUT"):
+        Path(os.environ["P22_METRICS_OUT"]).write_text(
+            json.dumps(metrics, indent=2))
+    return metrics
 
 
 if __name__ == "__main__":
