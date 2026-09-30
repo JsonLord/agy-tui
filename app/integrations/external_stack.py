@@ -8,30 +8,17 @@ from pathlib import Path
 from typing import Any
 
 
-GRAPHIFY_ENSURE = Path(
-    os.getenv(
-        "GRAPHIFY_ENSURE_BIN",
-        "/home/leon/.local/bin/graphify-ensure",
-    )
-)
+from app import runtime_config
 
-GRAPHIFY = Path(
-    os.getenv(
-        "GRAPHIFY_BIN",
-        "/home/leon/.local/bin/graphify",
-    )
-)
+GRAPHIFY_ENSURE = runtime_config.graphify_ensure_bin()
 
-OPENCODE_SUPERVISE = Path(
-    os.getenv(
-        "OPENCODE_SUPERVISE_BIN",
-        "/home/leon/.local/bin/opencode-supervise",
-    )
-)
+GRAPHIFY = runtime_config.graphify_bin()
+
+OPENCODE_SUPERVISE = runtime_config.opencode_supervise_bin()
 
 OPENCODE_SERVER = os.getenv(
     "OPENCODE_SERVER",
-    "http://127.0.0.1:4096",
+    str(runtime_config.opencode_server_url()),
 )
 
 

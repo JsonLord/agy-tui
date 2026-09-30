@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app import runtime_config
 from app.integrations.jules_api import (
     JulesAPIError,
     JulesClient,
@@ -690,6 +691,9 @@ def prepare_for_jules(
         before
     )
 
+    ag_gh_bin = runtime_config.ag_gh_bin()
+    ag_git_bin = runtime_config.ag_git_bin()
+
     brief += f"""
 
 ANTIGRAVITY GITHUB IDENTITY:
@@ -701,8 +705,8 @@ been authenticated successfully as:
 
 Use ONLY these wrappers for GitHub remote operations:
 
-  /home/leon/.local/bin/ag-gh
-  /home/leon/.local/bin/ag-git
+  {ag_gh_bin}
+  {ag_git_bin}
 
 Do not use or modify Leon's normal GitHub credentials.
 

@@ -1,0 +1,15 @@
+# P20-F build context: the release tree only. Nothing secret, nothing
+# state, nothing dev-only ever enters the image.
+.git/
+.serena/
+state/
+graphify-out/
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+reports/
+*.bak*
+.DS_Store
+# keep container/ (Dockerfile + redacted opencode template + opencode bin)

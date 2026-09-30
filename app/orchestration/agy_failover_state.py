@@ -1,13 +1,13 @@
 """P5 control-plane failover-state persistence (schema-valid, atomic).
 
-Appends schema-valid failover records to the control-plane FILE
-``/home/leon/antigravity-hybrid/state/autopilot/agy-failover-state.json``
-(a JSON ARRAY of records; the file lives OUTSIDE this repository and
-is gitignored — this module only ever reads/writes it on disk through
-the injectable ``path`` and never stages anything).
+Appends schema-valid failover records to the control-plane FILE at
+``<AGY_STATE_ROOT>/autopilot/agy-failover-state.json`` (P20: resolved from
+the configurable state root; the canonical default is the main checkout's
+state tree) — a JSON ARRAY of records, read/written on disk only through
+the injectable ``path`` and never staged into a feature worktree.
 
 Schema source of truth: ``state/autopilot/agy-failover-state.schema.json``
-(also control-plane, gitignored). It lives outside the importable
+(control-plane, gitignored). It lives outside the importable
 package tree, so the ``MIRRORED_*`` constants below MIRROR it and
 every mirror field points back at the schema file by comment;
 ``tests/test_agy_failover_state.py`` parses the real schema file at an
@@ -42,10 +42,11 @@ from pathlib import Path
 from typing import Any
 
 from app.orchestration.failover import FAILOVER_REASONS
+from app.runtime_config import state_root as _state_root
 
-DEFAULT_STATE_PATH = Path(
-    "/home/leon/antigravity-hybrid/state/autopilot/agy-failover-state.json"
-)
+# P20: resolved from the configurable state root (AGY_STATE_ROOT), not a
+# hardcoded host path.
+DEFAULT_STATE_PATH = Path(_state_root()) / "autopilot" / "agy-failover-state.json"
 SCHEMA_PATH = DEFAULT_STATE_PATH.with_name(
     "agy-failover-state.schema.json"
 )

@@ -20,10 +20,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from app import runtime_config
+
 # Bump when the MCP tool surface (agy-hybrid-mcp) changes shape.
 SCHEMA_VERSION = "1.0"
 
-DEFAULT_RELEASE_ROOT = Path("/home/leon/antigravity-hybrid")
+# P20: default release root resolves to THIS checkout (the directory
+# containing the app package), not a hardcoded host path. The env var still
+# overrides. runtime_config is the single source of truth for the default.
+DEFAULT_RELEASE_ROOT = runtime_config.release_root()
 
 
 def release_root() -> Path:
@@ -43,6 +48,17 @@ def _git_head(root: Path) -> str:
             return out.stdout.strip()
     except (OSError, subprocess.SubprocessError):
         pass
+    # P20: containerized releases ship WITHOUT .git. The build bakes a
+    # ``release-sha`` marker file (build-arg) so the release still reports
+    # its accepted SHA — the P19 "same release SHA" contract holds for
+    # image deployments too.
+    marker = root / "release-sha"
+    try:
+        sha = marker.read_text().strip()
+        if sha:
+            return sha
+    except OSError:
+        pass
     return "unknown"
 
 
@@ -54,6 +70,14 @@ def _git_dirty(root: Path) -> bool:
         )
         return bool(out.stdout.strip())
     except (OSError, subprocess.SubprocessError):
+        # No git binary / not a repo (e.g. a container image). If the
+        # release-sha marker is present, the tree is an immutable image
+        # build — report it as clean, not "unknown → dirty".
+        try:
+            if (root / "release-sha").read_text().strip():
+                return False
+        except OSError:
+            pass
         return True
 
 

@@ -1,4 +1,5 @@
 """P4 session-capture hardening: stdout first, server read-back after.
+from app import runtime_config
 
 The P3 live E2E proved the defect this module fixes: the
 ``opencode-supervise`` supervisor stdout did not carry the
@@ -35,11 +36,27 @@ opener — tests never touch the network.
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.request
 from typing import Any, Callable
 
-DEFAULT_SESSION_SERVER = "http://127.0.0.1:4096"
+from app import runtime_config
+
+
+def _default_server() -> str:
+    """The OpenCode session server, resolved from the configurable runtime
+    (P20). Env-overridable via OPENCODE_SERVER_URL; defaults to the loopback
+    worker backend. Tests that inject an opener still get a concrete
+    (non-string) server URL by default."""
+    return os.environ.get(
+        "OPENCODE_SERVER_URL",
+        str(runtime_config.opencode_server_url()),
+    )
+
+
+# Kept for any legacy consumers that imported the constant.
+DEFAULT_SESSION_SERVER = _default_server()
 
 # Session window: the server truncates /api/session responses (50 rows
 # without a limit); a wide window guarantees sessions created moments

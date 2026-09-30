@@ -1,0 +1,584 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "helmholtz/alias-code",
+  "provider": {
+    "helmholtz": {
+      "api": "openai",
+      "name": "Helmholtz Blablador",
+      "enabled": true,
+      "apiKey": "__APIKEY_ENV__",
+      "options": {
+        "baseURL": "https://api.helmholtz-blablador.fz-juelich.de/v1"
+      },
+      "models": {
+        "alias-qwen3.8-27b": {
+          "id": "alias-qwen3.8-27b",
+          "name": "Qwen3.8 27B (Helmholtz)"
+        },
+        "alias-qwen3.8-flash-next": {
+          "id": "alias-qwen3.8-flash-next",
+          "name": "Qwen3.8 Flash Next (Helmholtz)"
+        },
+        "alias-large": {
+          "id": "alias-large",
+          "name": "Qwen3.8-Flash-Next-NVFP4",
+          "maxTokens": 2048,
+          "contextWindow": 262144
+        },
+        "alias-fast": {
+          "id": "alias-fast",
+          "name": "GPT-OSS-120b",
+          "maxTokens": 4096,
+          "contextWindow": 131072
+        },
+        "alias-code": {
+          "id": "alias-code",
+          "name": "Qwen3.8-27B-FP8",
+          "maxTokens": 2048,
+          "contextWindow": 262144
+        },
+        "alias-apertus": {
+          "id": "alias-apertus",
+          "name": "Apertus-8B-Instruct-2509",
+          "maxTokens": 4096,
+          "contextWindow": 65536
+        },
+        "alias-eve": {
+          "id": "alias-eve",
+          "name": "EVE-Instruct",
+          "maxTokens": 2048,
+          "contextWindow": 131072
+        },
+        "alias-huge": {
+          "id": "alias-huge",
+          "name": "MiniMax-M2.7",
+          "maxTokens": 2048,
+          "contextWindow": 131072
+        },
+        "alias-embeddings": {
+          "id": "alias-embeddings",
+          "name": "Qwen3-Embedding-8B",
+          "contextWindow": 8192
+        },
+        "alias-qwen3-8b-embeddings": {
+          "id": "alias-qwen3-8b-embeddings",
+          "name": "Qwen3-Embedding-8B",
+          "contextWindow": 8192
+        },
+        "alias-deepseek-v4-flash-0731": {
+          "id": "alias-deepseek-v4-flash-0731",
+          "name": "DeepSeek-V4-Flash-0731",
+          "maxTokens": 1024,
+          "contextWindow": 1048576
+        },
+        "alias-glm-5.3-flash": {
+          "id": "alias-glm-5.3-flash",
+          "name": "GLM-5.3-Flash-AWQ-W4A16",
+          "maxTokens": 1024,
+          "contextWindow": 1048576
+        },
+        "alias-mimo-v2.6-flash": {
+          "id": "alias-mimo-v2.6-flash",
+          "name": "MiMo-V2.6-Flash-RL",
+          "maxTokens": 1024,
+          "contextWindow": 1048576
+        },
+        "alias-mimo-v2.6-pro": {
+          "id": "alias-mimo-v2.6-pro",
+          "name": "MiMo-V2.6-Pro-RL",
+          "maxTokens": 1024,
+          "contextWindow": 1048576
+        },
+        "alias-kimi-k3-1m": {
+          "id": "alias-kimi-k3-1m",
+          "name": "Kimi-K3-NVFP4",
+          "maxTokens": 1024,
+          "contextWindow": 1048576
+        }
+      }
+    },
+    "freellm": {
+      "api": "openai",
+      "name": "FreeLLM API",
+      "enabled": true,
+      "options": {
+        "baseURL": "http://100.98.105.55:5173/v1"
+      },
+      "models": {
+        "auto": {}
+      }
+    },
+    "headroom-gemma": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "GX10 Gemma via Headroom",
+      "enabled": true,
+      "options": {
+        "baseURL": "http://127.0.0.1:8790/v1"
+      },
+      "models": {
+        "gemma-4-12b": {
+          "name": "Gemma 4 12B (Headroom)",
+          "limit": {
+            "context": 196608,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "headroom-nemotron": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "GX10 Nemotron via Headroom",
+      "enabled": true,
+      "options": {
+        "baseURL": "http://127.0.0.1:8788/v1"
+      },
+      "models": {
+        "nemotron-3-nano:30b": {
+          "name": "Nemotron 3 Nano 30B (Headroom)",
+          "limit": {
+            "context": 262144,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "compaction": {
+    "auto": true,
+    "prune": false,
+    "tail_turns": 2
+  },
+  "experimental": {
+    "mcp_timeout": 120000
+  },
+  "mcp": {
+    "caddy-mcp": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "/home/leon/caddy-mcp/caddy-mcp",
+        "-transport",
+        "stdio",
+        "-url",
+        "http://127.0.0.1:2019"
+      ]
+    },
+    "github": {
+      "type": "remote",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer {env:GH_TOKEN}"
+      },
+      "enabled": true,
+      "oauth": false
+    },
+    "serena": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "uvx",
+        "--python",
+        "3.13",
+        "--from",
+        "serena-agent",
+        "serena",
+        "start-mcp-server",
+        "--context",
+        "antigravity",
+        "--project-from-cwd",
+        "--mode",
+        "no-memories"
+      ]
+    },
+    "remote-gx10": {
+      "type": "local",
+      "command": [
+        "/home/leon/bin/mcp-gx10-filesystem"
+      ]
+    }
+  },
+  "agent": {
+    "agy-supervisor-fallback": {
+      "description": "AGY role: supervisor (planning/stage gatekeeper, read-only) — RATE-LIMIT FALLBACK agent; bound model helmholtz/alias-qwen3.8-27b.",
+      "mode": "primary",
+      "model": "helmholtz/alias-qwen3.8-27b",
+      "prompt": "{file:./prompts/agy-supervisor.txt}",
+      "tools": {
+        "*": false,
+        "read": true,
+        "bash": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "serena_get_symbols_overview": true,
+        "serena_find_symbol": true,
+        "serena_find_referencing_symbols": true
+      },
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "bash": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "serena_get_symbols_overview": "allow",
+        "serena_find_symbol": "allow",
+        "serena_find_referencing_symbols": "allow"
+      }
+    },
+    "agy-dispatch-fallback": {
+      "description": "AGY role: dispatch (bounded coding worker) — RATE-LIMIT FALLBACK agent; bound model helmholtz/alias-qwen3.8-flash-next.",
+      "mode": "primary",
+      "model": "helmholtz/alias-qwen3.8-flash-next",
+      "prompt": "{file:./prompts/agy-dispatch.txt}",
+      "tools": {
+        "*": false,
+        "read": true,
+        "edit": true,
+        "write": true,
+        "bash": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "serena_get_symbols_overview": true,
+        "serena_find_symbol": true,
+        "serena_find_referencing_symbols": true
+      },
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "edit": "allow",
+        "write": "allow",
+        "bash": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "serena_get_symbols_overview": "allow",
+        "serena_find_symbol": "allow",
+        "serena_find_referencing_symbols": "allow"
+      }
+    },
+    "agy-supervisor": {
+      "description": "AGY role: supervisor (planning/stage gatekeeper, read-only) — PRIMARY agent; bound model helmholtz/alias-mimo-v2.6-pro.",
+      "mode": "primary",
+      "model": "helmholtz/alias-mimo-v2.6-pro",
+      "prompt": "{file:./prompts/agy-supervisor.txt}",
+      "tools": {
+        "*": false,
+        "read": true,
+        "bash": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "serena_get_symbols_overview": true,
+        "serena_find_symbol": true,
+        "serena_find_referencing_symbols": true
+      },
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "bash": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "serena_get_symbols_overview": "allow",
+        "serena_find_symbol": "allow",
+        "serena_find_referencing_symbols": "allow"
+      }
+    },
+    "agy-dispatch": {
+      "description": "AGY role: dispatch (bounded coding worker) — PRIMARY agent; bound model helmholtz/alias-mimo-v2.6-flash.",
+      "mode": "primary",
+      "model": "helmholtz/alias-mimo-v2.6-flash",
+      "prompt": "{file:./prompts/agy-dispatch.txt}",
+      "tools": {
+        "*": false,
+        "read": true,
+        "edit": true,
+        "write": true,
+        "bash": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "serena_get_symbols_overview": true,
+        "serena_find_symbol": true,
+        "serena_find_referencing_symbols": true
+      },
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "edit": "allow",
+        "write": "allow",
+        "bash": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "serena_get_symbols_overview": "allow",
+        "serena_find_symbol": "allow",
+        "serena_find_referencing_symbols": "allow"
+      }
+    },
+    "agy-planning-analyst": {
+      "description": "Read-only repository investigator for AGY checkpoint planning (Serena + Graphify). Never mutates.",
+      "mode": "primary",
+      "model": "helmholtz/alias-mimo-v2.6-flash",
+      "prompt": "You are the AGY planning analyst. Read-only repository investigation only. Use Graphify for structure (graphify-out/graph.json queries only — NEVER graphify update|watch|install|add|clone) and Serena for symbols (serena_get_symbols_overview / serena_find_symbol / serena_find_referencing_symbols). Answer the analysis questions and return ONLY the structured JSON evidence object: {summary, relevant_symbols, dependency_paths, existing_tests, likely_files, constraints, open_questions, source}. Prefer empty lists over guesses; put uncertainty in open_questions. Never edit, write, commit, or run non-readonly commands.",
+      "tools": {
+        "*": false,
+        "read": true,
+        "bash": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "serena_get_symbols_overview": true,
+        "serena_find_symbol": true,
+        "serena_find_referencing_symbols": true,
+        "edit": false,
+        "write": false,
+        "patch": false,
+        "webfetch": false,
+        "websearch": false
+      },
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "bash": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "serena_get_symbols_overview": "allow",
+        "serena_find_symbol": "allow",
+        "serena_find_referencing_symbols": "allow",
+        "edit": "deny",
+        "write": "deny",
+        "patch": "deny",
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
+    },
+    "agy-ui-reviewer": {
+      "description": "Read-only UI reviewer for the AGY G2 gate (P10). Inspects the UI surface against the design reference; emits a JSON verdict. Cannot edit, write, patch, or commit anything.",
+      "mode": "primary",
+      "model": "helmholtz/alias-mimo-v2.6-flash",
+      "prompt": "You are the AGY UI reviewer. Read the design reference and the UI surface paths given in the task, then produce ONLY a JSON object: {\"verdict\":\"PASS|FAIL\",\"findings\":[{\"severity\":\"major|minor\",\"file\":\"<path>\",\"detail\":\"<what deviates from the design and why it matters>\"}],\"summary\":\"<one-paragraph assessment>\"}. You are strictly read-only: never create, edit, delete, or run anything that mutates the repository. Judge visual/structural fidelity against the design reference only; never invent files or behaviors you did not read. Your entire final answer must be the JSON object and nothing else.",
+      "tools": {
+        "*": false,
+        "read": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "serena_get_symbols_overview": true,
+        "serena_find_symbol": true,
+        "serena_find_referencing_symbols": true,
+        "bash": true,
+        "write": false,
+        "edit": false,
+        "patch": false
+      },
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "serena_get_symbols_overview": "allow",
+        "serena_find_symbol": "allow",
+        "serena_find_referencing_symbols": "allow",
+        "bash": "allow",
+        "write": "deny",
+        "edit": "deny",
+        "patch": "deny",
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
+    },
+    "agy-adversarial-reviewer": {
+      "description": "Read-only adversarial reviewer for the AGY G3 gate (P10). Produces ONLY a structured JSON findings document; never mutates the repo.",
+      "mode": "primary",
+      "model": "helmholtz/alias-mimo-v2.6-flash",
+      "prompt": "You are the AGY adversarial reviewer. Review the code you are pointed at for failure modes, edge cases, and security holes. You are strictly READ-ONLY: never create, edit, or delete any file; bash only for read-only inspection. Produce ONLY a JSON document — no prose, no markdown: {\"verdict\": \"PASS|FAIL\", \"findings\": [{\"severity\": \"critical|major|minor\", \"file\": str, \"line\": int|null, \"detail\": str}], \"summary\": str}. At most 25 findings, most severe first. Every finding must be grounded in code you actually read — never invent file paths, line numbers, or behaviour. critical = exploitable or data-losing defect; major = realistic correctness failure on an edge case; minor = robustness/maintainability risk. verdict FAIL iff at least one critical or major finding exists.",
+      "tools": {
+        "*": false,
+        "read": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "serena_get_symbols_overview": true,
+        "serena_find_symbol": true,
+        "serena_find_referencing_symbols": true,
+        "bash": true,
+        "write": false,
+        "edit": false,
+        "patch": false
+      },
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "serena_get_symbols_overview": "allow",
+        "serena_find_symbol": "allow",
+        "serena_find_referencing_symbols": "allow",
+        "bash": "allow",
+        "write": "deny",
+        "edit": "deny",
+        "patch": "deny",
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
+    },
+    "agy-fixer": {
+      "description": "Bounded fixer for the AGY G3 gate (P10). Applies ONLY the given repair instructions inside the given file scope; never touches tests.",
+      "mode": "primary",
+      "model": "helmholtz/alias-mimo-v2.6-flash",
+      "prompt": "You are the AGY bounded fixer. You receive explicit repair instructions and the critical/major findings to address. Modify ONLY the files inside the scope you were given. NEVER touch test files (anything under tests/ or named test_*.py). No new dependencies. No behaviour beyond what the findings require — you fix, you do not redesign. Do not run or rewrite the test suite; the runtime re-checks deterministically after you.",
+      "tools": {
+        "*": false,
+        "edit": true,
+        "write": true,
+        "patch": true,
+        "read": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "bash": true
+      },
+      "permission": {
+        "*": "deny",
+        "edit": "allow",
+        "write": "allow",
+        "patch": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
+    },
+    "nemotron-supervisor": {
+      "description": "Supervisory agent (Nemotron 3 Nano via Headroom): plans, inspects evidence, delegates bounded coding to gemma-local via delegate_worker. Does not code itself.",
+      "mode": "primary",
+      "model": "headroom-nemotron/nemotron-3-nano:30b",
+      "prompt": "{file:./prompts/nemotron-supervisor.txt}",
+      "tools": {
+        "*": false,
+        "read": true,
+        "bash": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "delegate_worker": true,
+        "laya_decide": true,
+        "process_sentinel": true,
+        "serena_get_symbols_overview": true,
+        "serena_find_symbol": true,
+        "serena_find_referencing_symbols": true
+      },
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "bash": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "delegate_worker": "allow",
+        "laya_decide": "allow",
+        "process_sentinel": "allow",
+        "serena_get_symbols_overview": "allow",
+        "serena_find_symbol": "allow",
+        "serena_find_referencing_symbols": "allow"
+      }
+    },
+    "gemma-local": {
+      "description": "Lean local coding worker using native code tools and Serena. GitHub MCP hidden.",
+      "mode": "primary",
+      "model": "headroom-gemma/gemma-4-12b",
+      "tools": {
+        "*": false,
+        "read": true,
+        "edit": true,
+        "write": true,
+        "bash": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "serena_get_symbols_overview": true,
+        "serena_find_symbol": true,
+        "serena_find_referencing_symbols": true
+      },
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "edit": "allow",
+        "bash": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "serena_get_symbols_overview": "allow",
+        "serena_find_symbol": "allow",
+        "serena_find_referencing_symbols": "allow",
+        "graphify_query_graph": "allow",
+        "graphify_get_node": "allow",
+        "graphify_get_neighbors": "allow",
+        "graphify_shortest_path": "allow"
+      },
+      "prompt": "{file:./prompts/gemma-local.txt}"
+    },
+    "gemma-github": {
+      "description": "Gemma coding worker with Serena and GitHub MCP for explicit GitHub tasks.",
+      "mode": "primary",
+      "model": "headroom-gemma/gemma-4-12b",
+      "tools": {
+        "github_*": true,
+        "caddy-mcp_*": false,
+        "serena_*": true
+      },
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "bash": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "serena_*": "allow",
+        "github_*": "allow",
+        "caddy-mcp_*": "deny"
+      }
+    },
+    "agy-test-author": {
+      "description": "AGY role: test author (G1 Behavior/TDD) - writes tests only, never production code. Path-scoping enforced by the G1 runtime.",
+      "mode": "primary",
+      "model": "helmholtz/alias-mimo-v2.6-flash",
+      "prompt": "You are the AGY test author for G1 Behavior/TDD gate execution. You write TEST FILES ONLY. Rules: (1) create/modify files ONLY under the test path given in the task (e.g. tests/). (2) NEVER edit, patch, or modify production source files - use write only for new test files. (3) Write tests that fail until the behavior is implemented (test-first): they must demonstrate RED before implementation. (4) Cover every planned test listed in the behavior contract, including edge cases from the instructions. (5) Do not run the full suite repeatedly - write the tests and reply DONE. Use Serena for symbol lookups if helpful. Never commit.",
+      "tools": {
+        "*": false,
+        "read": true,
+        "write": true,
+        "bash": true,
+        "glob": true,
+        "grep": true,
+        "list": true,
+        "serena_get_symbols_overview": true,
+        "serena_find_symbol": true,
+        "serena_find_referencing_symbols": true
+      },
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "write": "allow",
+        "bash": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "deny",
+        "patch": "deny",
+        "serena_get_symbols_overview": "allow",
+        "serena_find_symbol": "allow",
+        "serena_find_referencing_symbols": "allow"
+      }
+    }
+  }
+}

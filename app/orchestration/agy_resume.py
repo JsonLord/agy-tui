@@ -105,6 +105,7 @@ from app.orchestration.agy_runstate import StageRunState
 from app.orchestration.agy_session import SOURCE_NONE
 from app.orchestration.decompose import run_stage_acceptance
 from app.schemas import DevelopmentPlan, PlanStage
+from app import runtime_config
 
 # ---------------------------------------------------------------------------
 # The 10 recovery states
@@ -133,7 +134,7 @@ STAGE_COMMITTED = "STAGE_COMMITTED"
 
 TERMINAL_PLAN_STATES = (PLAN_ACCEPTED, PLAN_REJECTED)
 
-DEFAULT_SESSION_SERVER = "http://127.0.0.1:4096"
+DEFAULT_SESSION_SERVER = str(runtime_config.opencode_server_url())
 DISPATCH_AGENT_PREFIX = "agy-"
 
 

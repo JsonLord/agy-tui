@@ -205,17 +205,42 @@ class TestMirrorMatchesControlPlaneSchema(unittest.TestCase):
     """The mirrored constants == the real schema file (injectable)."""
 
     def test_default_state_path_is_the_control_plane_file(self):
-        """The default path is pinned to the control-plane location."""
+        """The default path is pinned to the control-plane location —
+        resolved from the configurable state root (P20: no baked host
+        path), never a hardcoded ``/home/...``."""
+        from app import runtime_config
+
+        expected_state = Path(runtime_config.state_root())
         self.assertEqual(
             str(DEFAULT_STATE_PATH),
-            "/home/leon/antigravity-hybrid/state/autopilot"
-            "/agy-failover-state.json",
+            str(expected_state / "autopilot" / "agy-failover-state.json"),
         )
         self.assertEqual(
             str(SCHEMA_PATH),
-            "/home/leon/antigravity-hybrid/state/autopilot"
-            "/agy-failover-state.schema.json",
+            str(expected_state / "autopilot" / "agy-failover-state.schema.json"),
         )
+        # Portability contract (P20): the default FOLLOWS the
+        # configurable state root — set AGY_STATE_ROOT and reload, the
+        # module default re-resolves (no hardcoded path).
+        import importlib
+        import os as _os
+
+        from app.orchestration import agy_failover_state as afs
+
+        old = _os.environ.get("AGY_STATE_ROOT")
+        _os.environ["AGY_STATE_ROOT"] = "/tmp/p20-fs-override"
+        try:
+            importlib.reload(afs)
+            self.assertEqual(
+                str(afs.DEFAULT_STATE_PATH),
+                "/tmp/p20-fs-override/autopilot/agy-failover-state.json",
+            )
+        finally:
+            if old is None:
+                _os.environ.pop("AGY_STATE_ROOT", None)
+            else:
+                _os.environ["AGY_STATE_ROOT"] = old
+            importlib.reload(afs)
 
     def _load_schema(self, path: Path):
         if not path.exists():

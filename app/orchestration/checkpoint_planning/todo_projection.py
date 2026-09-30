@@ -31,6 +31,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable
 
+from app import runtime_config
+
 try:  # Worker A's validation seam (authoritative at integration time)
     from app.orchestration.checkpoint_planning.validation import (
         checkpoint_execution_order,
@@ -68,7 +70,7 @@ except ImportError:  # pragma: no cover - seam-guard for parallel development
         return order
 
 
-DEFAULT_SERVER = "http://127.0.0.1:4096"
+DEFAULT_SERVER = str(runtime_config.opencode_server_url())
 
 GATE_ORDER = ("G1_behavior", "G2_ui", "G3_adversarial", "G4_human")
 GATE_LABELS = {

@@ -9,10 +9,11 @@ from google.antigravity.hooks import policy
 
 from app.config import Settings
 from app.schemas import WorkPlan
+from app import runtime_config
 
 REMOTE_GX10 = types.McpStdioServer(
     name="remote-gx10",
-    command="/home/leon/bin/mcp-gx10-filesystem",
+    command=str(runtime_config.gx10_bin()),
     args=[],
     enabled_tools=[
         "list_allowed_directories",

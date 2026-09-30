@@ -39,7 +39,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-DEFAULT_SESSION_SERVER = "http://127.0.0.1:4096"
+from app import runtime_config
+
+DEFAULT_SESSION_SERVER = str(runtime_config.opencode_server_url())
 
 UNKNOWN = "unknown"
 

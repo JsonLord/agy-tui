@@ -11,12 +11,9 @@ from typing import Any
 # Repository root (this file lives at app/investigation/graph_manager.py)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-GRAPHIFY_BIN = Path(
-    os.getenv(
-        "GRAPHIFY_BIN",
-        "/home/leon/.local/bin/graphify",
-    )
-)
+from app import runtime_config
+
+GRAPHIFY_BIN = runtime_config.graphify_bin()
 
 # Canonical env file carrying Graphify's backend configuration
 GRAPHIFY_ENV_FILE = (

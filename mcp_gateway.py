@@ -12,11 +12,13 @@ import hashlib
 from mcp.server import MCPServer
 
 
-ROOT = Path(os.environ.get("AGY_RELEASE_ROOT", "/home/leon/antigravity-hybrid"))
+from app.runtime_config import release_root as _release_root, state_root as _state_root
+from app import runtime_config
+ROOT = Path(os.environ.get("AGY_RELEASE_ROOT", _release_root()))
 # P19: state root is configurable (AGY_STATE_ROOT) with the canonical
 # default at the hybrid main checkout — the release runtime and the
 # development worktrees share ONE canonical state tree.
-STATE = Path(os.environ.get("AGY_STATE_ROOT", "/home/leon/antigravity-hybrid/state"))
+STATE = Path(os.environ.get("AGY_STATE_ROOT", _state_root()))
 RUNS = STATE / "runs"
 
 
@@ -105,7 +107,7 @@ def local_chat(
 
 
 
-GRAPHIFY_BIN = "/home/leon/.local/bin/graphify"
+GRAPHIFY_BIN = str(runtime_config.graphify_bin())
 BRIEFS_ROOT = Path(__file__).resolve().parent / "state" / "briefs"
 
 
