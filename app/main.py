@@ -439,6 +439,290 @@ def _checkpoint_decide(args) -> int:
     return 0
 
 
+def project_main(argv: list[str]) -> int:
+    """Entry for ``python3 -m app.main project …`` (P18).
+
+    The ONE obvious production entrypoint. It drives the
+    :class:`ProjectSupervisor` — the single lifecycle coordinator — and
+    prints a compact, human-readable view. It performs only DETERMINISTIC
+    work per invocation: no wait loops, no model-owned polling. ``advance``
+    makes at most ONE cloud call and then reports the next park (human /
+    workers / reentry / terminal). G0 admission + G4 are human-only
+    (fail closed on any non-human actor, mirroring the engine).
+    """
+    parser = argparse.ArgumentParser(
+        prog="agy-hybrid project",
+        description="Run a project through the AGY Hybrid supervisor "
+                    "(P18).",
+    )
+    sub = parser.add_subparsers(dest="project_command", required=True)
+
+    p_start = sub.add_parser(
+        "start", help="create a NEW project (no cloud call yet)"
+    )
+    p_start.add_argument("--project-id", required=True)
+    p_start.add_argument("--prompt", required=True,
+                         help="the initial user request")
+    p_start.add_argument("--objective", required=True,
+                         help="one-line project objective")
+    p_start.add_argument("--state-root", default="state")
+    p_start.add_argument("--workdir", default=".",
+                         help="repo dir the batch workers operate on")
+
+    p_status = sub.add_parser(
+        "status", help="read-only: state, park, event feed, checkpoint"
+    )
+    p_status.add_argument("--project-id", required=True)
+    p_status.add_argument("--state-root", default="state")
+    p_status.add_argument("--workdir", default=".")
+
+    p_advance = sub.add_parser(
+        "advance", help="deterministic advance; at most ONE cloud call"
+    )
+    p_advance.add_argument("--project-id", required=True)
+    p_advance.add_argument("--state-root", default="state")
+    p_advance.add_argument("--workdir", default=".")
+
+    p_answer = sub.add_parser(
+        "answer", help="human answer to a parked CLARIFY / NEEDS_HUMAN"
+    )
+    p_answer.add_argument("--project-id", required=True)
+    p_answer.add_argument("--text", required=True)
+    p_answer.add_argument("--actor", default="human:cli",
+                          help="must be human:* (fail closed otherwise)")
+    p_answer.add_argument("--state-root", default="state")
+    p_answer.add_argument("--workdir", default=".")
+
+    p_approve = sub.add_parser(
+        "approve", help="G4 HUMAN decision on a lowered checkpoint "
+                        "(APPROVE | NEEDS_CHANGES | CANCEL)"
+    )
+    p_approve.add_argument("--project-id", required=True)
+    p_approve.add_argument("--decision", required=True,
+                           choices=["APPROVE", "NEEDS_CHANGES", "CANCEL"])
+    p_approve.add_argument("--feedback", default="")
+    p_approve.add_argument("--actor", default="human:cli")
+    p_approve.add_argument("--state-root", default="state")
+    p_approve.add_argument("--workdir", default=".")
+
+    p_g0 = sub.add_parser(
+        "admit", help="G0 HUMAN admission of a P16-lowered checkpoint "
+                      "plan (the only route to submission)"
+    )
+    p_g0.add_argument("--project-id", required=True)
+    p_g0.add_argument("--plan-id", required=True,
+                      help="p16-<project>-<batch>")
+    p_g0.add_argument("--approver", default="human:cli")
+    p_g0.add_argument("--state-root", default="state")
+    p_g0.add_argument("--workdir", default=".")
+
+    p_cancel = sub.add_parser("cancel", help="operator cancel (terminal)")
+    p_cancel.add_argument("--project-id", required=True)
+    p_cancel.add_argument("--reason", default="cancelled by operator")
+    p_cancel.add_argument("--state-root", default="state")
+    p_cancel.add_argument("--workdir", default=".")
+
+    p_resume = sub.add_parser(
+        "resume", help="re-derive from persisted state then advance "
+                       "(restart recovery; no duplicated work)"
+    )
+    p_resume.add_argument("--project-id", required=True)
+    p_resume.add_argument("--state-root", default="state")
+    p_resume.add_argument("--workdir", default=".")
+
+    args = parser.parse_args(argv)
+    return _project_dispatch(args)
+
+
+def _build_production_supervisor(
+    state_root: str, project_id: str, workdir: str
+) -> "ProjectSupervisor":
+    """Production wiring: tool-free P17 planner (P14 quota router) +
+    supervised OpenCode workers + the canonical P11–P13 checkpoint
+    executor. No implicit agent defaults (P9.2)."""
+    from app.orchestration.cloud_batch.dispatcher import (
+        OpenCodeWorkerRunner,
+    )
+    from app.orchestration.project_supervisor import (
+        ProjectSupervisor,
+        SupervisorConfig,
+    )
+    from app.orchestration.project_supervisor_checkpoint import (
+        CanonicalCheckpointExecutor,
+    )
+
+    return ProjectSupervisor(
+        SupervisorConfig(
+            state_root=state_root,
+            project_id=project_id,
+            runner=OpenCodeWorkerRunner(),
+            checkpoint_executor=CanonicalCheckpointExecutor(
+                repo=workdir, state_root=state_root
+            ),
+            base_sha=_git_head(workdir),
+            workdir=workdir,
+        )
+    )
+
+
+def _git_head(workdir: str) -> str:
+    """Best-effort HEAD sha of the workdir (deterministic fallback)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "0" * 40
+
+
+def _project_dispatch(args) -> int:
+    from app.orchestration.cloud_batch.planner import CloudPlannerUnavailable
+    from app.orchestration.project_supervisor import ProjectSupervisorError
+    from app.orchestration.project_supervisor_checkpoint import (
+        CheckpointExecutorError,
+    )
+
+    def _view(sup) -> str:
+        v = sup.get_project()
+        lines = [
+            f"project:  {v['project_id']}",
+            f"state:    {v['state']}",
+            f"gen:      {v['generation']}",
+            f"objective:{v['objective']}",
+            f"cloud_calls: {v['cloud_calls']}",
+        ]
+        park = v.get("park")
+        if park:
+            lines.append(f"park:     {park.get('kind')}")
+            if park.get("question"):
+                lines.append(f"  question: {park['question']}")
+        if v.get("checkpoint_batch"):
+            lines.append(f"checkpoint batch: {v['checkpoint_batch']}")
+            if v.get("g4_status"):
+                lines.append(f"  g4_status: {v['g4_status']}")
+        if v.get("events"):
+            last = v["events"][-1]
+            lines.append(f"last event: {last}")
+        return "\n".join(lines)
+
+    try:
+        if args.project_command == "start":
+            sup = _build_production_supervisor(
+                args.state_root, args.project_id, args.workdir
+            )
+            sup.create_project(
+                initial_prompt=args.prompt, objective=args.objective
+            )
+            print(_view(sup))
+            print("\nNext: project advance (makes the first cloud call — "
+                  "CLARIFY)")
+            return 0
+
+        if args.project_command == "status":
+            sup = _build_production_supervisor(
+                args.state_root, args.project_id, args.workdir
+            )
+            sup.open_project(args.project_id)
+            print(_view(sup))
+            return 0
+
+        if args.project_command in ("advance", "resume"):
+            sup = _build_production_supervisor(
+                args.state_root, args.project_id, args.workdir
+            )
+            sup.open_project(args.project_id)
+            result = sup.advance_project()
+            print(_view(sup))
+            print(f"\nadvance -> {result.get('action') or 'done'}")
+            return 0
+
+        if args.project_command == "answer":
+            sup = _build_production_supervisor(
+                args.state_root, args.project_id, args.workdir
+            )
+            sup.open_project(args.project_id)
+            res = sup.submit_human_input(text=args.text, actor=args.actor)
+            print(f"answered ({res.get('kind')}); project now parked or "
+                  f"resumable:")
+            print(_view(sup))
+            return 0
+
+        if args.project_command == "approve":
+            sup = _build_production_supervisor(
+                args.state_root, args.project_id, args.workdir
+            )
+            sup.open_project(args.project_id)
+            sup.submit_g4_decision(
+                decision=args.decision,
+                feedback=args.feedback,
+                actor=args.actor,
+            )
+            print(_view(sup))
+            return 0
+
+        if args.project_command == "admit":
+            from app.orchestration.project_supervisor import (
+                load_checkpoint_plan,
+            )
+            from app.orchestration.project_supervisor_checkpoint import (
+                CheckpointExecutorError,
+                CanonicalCheckpointExecutor,
+            )
+
+            sup = _build_production_supervisor(
+                args.state_root, args.project_id, args.workdir
+            )
+            sup.open_project(args.project_id)
+            batch = sup.checkpoint_batch()
+            if batch is None:
+                raise ProjectSupervisorError("no checkpoint plan found")
+            plan = load_checkpoint_plan(
+                sup.store, args.project_id, batch
+            )
+            executor = CanonicalCheckpointExecutor(
+                repo=args.workdir, state_root=args.state_root
+            )
+            result = executor.admit(plan, actor=args.approver)
+            print(f"G0 admission: {result['status']} "
+                  f"(idempotent={result['idempotent']})")
+            return 0
+
+        if args.project_command == "cancel":
+            sup = _build_production_supervisor(
+                args.state_root, args.project_id, args.workdir
+            )
+            sup.open_project(args.project_id)
+            sup.cancel_project(reason=args.reason)
+            print(_view(sup))
+            return 0
+
+        return 2  # pragma: no cover
+    except ProjectSupervisorError as exc:
+        print(f"project {args.project_command} failed: {exc}",
+              file=sys.stderr)
+        return 1
+    except CheckpointExecutorError as exc:
+        print(f"checkpoint admission/execution failed: {exc}",
+              file=sys.stderr)
+        return 1
+    except CloudPlannerUnavailable as exc:
+        # The tool-free planner needs Gemini/Vertex credentials (P17).
+        # Fail closed with a clean message — the project state is
+        # untouched and the call is not counted.
+        print(f"project {args.project_command} failed: cloud planner "
+              f"unavailable — {exc}", file=sys.stderr)
+        return 1
+
+
 async def async_main():
     # P11: lazy so `python3 -m app.main checkpoint …` runs in environments
     # without the google.antigravity host runtime (the viewer is pure
@@ -471,4 +755,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "checkpoint":
         # P11 viewer path — synchronous, read-only, no run loop.
         raise SystemExit(checkpoint_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "project":
+        # P18 supervisor path — synchronous, deterministic per call,
+        # at most one cloud call per advance.
+        raise SystemExit(project_main(sys.argv[2:]))
     asyncio.run(async_main())
