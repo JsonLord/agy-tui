@@ -12,8 +12,11 @@ import hashlib
 from mcp.server import MCPServer
 
 
-ROOT = Path("/home/leon/antigravity-hybrid")
-STATE = ROOT / "state"
+ROOT = Path(os.environ.get("AGY_RELEASE_ROOT", "/home/leon/antigravity-hybrid"))
+# P19: state root is configurable (AGY_STATE_ROOT) with the canonical
+# default at the hybrid main checkout — the release runtime and the
+# development worktrees share ONE canonical state tree.
+STATE = Path(os.environ.get("AGY_STATE_ROOT", "/home/leon/antigravity-hybrid/state"))
 RUNS = STATE / "runs"
 
 
@@ -525,6 +528,18 @@ def agy_checkpoint_plan_submit_tool(plan_json: str, state_root: str) -> str:
         _p8_tools.agy_checkpoint_plan_submit_tool(plan_json, state_root),
         indent=2,
     )
+
+
+@mcp.tool()
+def agy_release_info_tool() -> str:
+    """P19: lightweight release/version endpoint. Returns the release
+    SHA this MCP gateway is running from, the tool schema version, and
+    the production capabilities (probed by real imports). No secrets.
+    Lets any client verify the live surface matches the accepted
+    release."""
+    from app.release_info import collect
+
+    return json.dumps(collect().to_dict(), indent=2)
 
 
 if __name__ == "__main__":

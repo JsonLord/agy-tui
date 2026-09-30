@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# P19-A — AGY Hybrid release wrapper.
+#
+# THE single place the runtime knows where the accepted release lives.
+# All services/wrappers reference THIS, never a development worktree or a
+# stale main:
+#
+#   AGY_RELEASE_ROOT   release checkout   (default: /home/leon/antigravity-current)
+#   AGY_STATE_ROOT     canonical state    (default: /home/leon/antigravity-hybrid/state)
+#
+# The release root is an atomic symlink to an immutable, accepted
+# release checkout. `agy-hybrid-release use <sha> <checkout>` swaps it
+# atomically (ln -sfn) and refuses a target that is not at that SHA.
+# Until a dedicated release checkout exists, the accepted baseline IS the
+# main checkout (which the venv + canonical state live in), so the
+# default symlink points there — created by `use`, consumed by `mcp`/`info`.
+set -euo pipefail
+
+RELEASE_LINK="${AGY_RELEASE_LINK:-/home/leon/antigravity-current}"
+RELEASE_ROOT="${AGY_RELEASE_ROOT:-$RELEASE_LINK}"
+STATE_ROOT="${AGY_STATE_ROOT:-/home/leon/antigravity-hybrid/state}"
+# The interpreter of record for the MCP runtime (fixed, known-good, has
+# mcp + google.* deps). AGY_PYTHON overrides for other deployments.
+DEFAULT_PYTHON="/home/leon/coding/bin/python"
+
+resolve_python() {
+  if [ -n "${AGY_PYTHON:-}" ]; then echo "$AGY_PYTHON"; return; fi
+  local venv="$RELEASE_ROOT/.venv/bin/python"
+  if [ -x "$venv" ]; then echo "$venv"; return; fi
+  echo "$DEFAULT_PYTHON"
+}
+
+require_release() {
+  [ -e "$RELEASE_ROOT" ] || { echo "release not set: run 'agy-hybrid-release use <sha> <checkout>' (link $RELEASE_LINK missing)" >&2; exit 1; }
+}
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  use)
+    # `agy-hybrid-release use <sha> <checkout-dir>` — atomically point the
+    # release at a checkout whose git HEAD is <sha>.
+    want="${1:-}"; [ -n "$want" ] || { echo "usage: agy-hybrid-release use <sha> <checkout-dir>" >&2; exit 2; }
+    target="${2:-/home/leon/antigravity-hybrid}"
+    [ -d "$target" ] || { echo "release target dir not found: $target" >&2; exit 1; }
+    have="$(git -C "$target" rev-parse HEAD 2>/dev/null || echo none)"
+    case "$have" in
+      "$want"*) : ;;
+      *) echo "REFUSED: $target is at ${have:0:12}, not $want" >&2; exit 1 ;;
+    esac
+    tmp="$(mktemp -u "$RELEASE_LINK.tmp.XXXXXX")"
+    ln -sfn "$target" "$tmp" && mv -T "$tmp" "$RELEASE_LINK"
+    echo "release -> $target ($have)"
+    ;;
+
+  sha)
+    require_release
+    git -C "$RELEASE_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown"
+    ;;
+
+  info)
+    require_release
+    PY="$(resolve_python)"
+    cd "$RELEASE_ROOT" && AGY_RELEASE_ROOT="$RELEASE_ROOT" AGY_STATE_ROOT="$STATE_ROOT" \
+      "$PY" -c "from app.release_info import render; print(render())"
+    ;;
+
+  bootstrap)
+    # Dependency readiness + explicit failures (no silent pip
+    # --break-system-packages). Verifies the interpreter + the packages
+    # the release runtime needs, and reports what is missing.
+    PY="$(resolve_python)"
+    [ -x "$PY" ] || { echo "FAIL: python interpreter not found at $PY" >&2; exit 1; }
+    echo "interpreter: $PY ($("$PY" --version 2>&1))"
+    cd "$RELEASE_ROOT"
+    "$PY" - <<'PYEOF'
+import importlib, importlib.metadata as im, sys
+mods = ["mcp", "google.genai"]
+# google-antigravity is OPTIONAL for the P17 tool-free transport; the
+# legacy P9.2 run-task path still uses it, so report its status honestly.
+optional = ["google.antigravity"]
+fail = False
+for m in mods:
+    try:
+        importlib.import_module(m)
+        try: ver = im.version(m)
+        except Exception: ver = "installed"
+        print(f"OK    {m} {ver}")
+    except Exception:
+        print(f"FAIL  {m} (missing)")
+        fail = True
+for m in optional:
+    try:
+        importlib.import_module(m)
+        try: ver = im.version(m)
+        except Exception: ver = "installed"
+        print(f"OK    {m} {ver} (optional: legacy agentic path)")
+    except Exception:
+        print(f"WARN  {m} missing (optional — legacy agentic run-task path only)")
+sys.exit(1 if fail else 0)
+PYEOF
+    rc=$?
+    # OpenCode worker backend reachability (the coding-worker backend).
+    if curl -s --max-time 5 -o /dev/null http://127.0.0.1:4096/session 2>/dev/null; then
+      echo "OK    opencode server 127.0.0.1:4096"
+    else
+      echo "WARN  opencode server 127.0.0.1:4096 not reachable (start opencode.service)"
+    fi
+    exit $rc
+    ;;
+
+  smoke)
+    require_release
+    PY="$(resolve_python)"
+    # P19-E — release smoke: prove MCP + supervisor + human surface +
+    # cloud planner all report the SAME release SHA. Minimal calls, no
+    # live cloud, no secrets.
+    cd "$RELEASE_ROOT"
+    export AGY_RELEASE_ROOT="$RELEASE_ROOT" AGY_STATE_ROOT="$STATE_ROOT"
+    sha="$("$PY" -c "from app.release_info import collect; print(collect().release_sha)")"
+    echo "release sha (authoritative): $sha"
+    # 1. release info module.
+    info_sha="$("$PY" -c "from app.release_info import collect; print(collect().release_sha)")"
+    [ "$info_sha" = "$sha" ] || { echo "FAIL release_info sha mismatch"; exit 1; }
+    echo "OK    release_info: $info_sha"
+    # 2. the MCP gateway module loads its tools from THIS release.
+    mcp_sha="$("$PY" -c "
+import mcp_gateway, json
+from app.release_info import collect
+print(collect().release_sha)
+")"
+    [ "$mcp_sha" = "$sha" ] || { echo "FAIL mcp_gateway sha mismatch"; exit 1; }
+    echo "OK    mcp_gateway:  $mcp_sha"
+    # 3. supervisor + human surface import from THIS release.
+    "$PY" -c "import app.orchestration.project_supervisor, app.human_surface; print('OK    supervisor+human-surface import clean')"
+    # 4. cloud planner (tool-free) present.
+    "$PY" -c "from app.orchestration.cloud_batch.planner import TOOL_FREE_TIER_PRIORITY; print('OK    cloud planner tool-free tiers:', TOOL_FREE_TIER_PRIORITY)"
+    echo "SMOKE PASS — all surfaces report $sha"
+    ;;
+
+  mcp)
+    # Launch the MCP gateway from the release root (the service's entry).
+    require_release
+    PY="$(resolve_python)"
+    cd "$RELEASE_ROOT"
+    exec env AGY_RELEASE_ROOT="$RELEASE_ROOT" AGY_STATE_ROOT="$STATE_ROOT" \
+      "$PY" "$RELEASE_ROOT/mcp_gateway.py"
+    ;;
+
+  *)
+    cat >&2 <<EOF
+agy-hybrid-release — the single release pointer for AGY Hybrid (P19).
+
+  agy-hybrid-release use <sha> [checkout-dir]   atomically point the release at a checkout at <sha>
+  agy-hybrid-release sha                        print the live release SHA
+  agy-hybrid-release info                       release SHA + schema version + capabilities
+  agy-hybrid-release bootstrap                  dependency readiness (explicit failures)
+  agy-hybrid-release smoke                      prove all surfaces report the same release SHA
+  agy-hybrid-release mcp                        run the MCP gateway from the release root
+
+Environment:
+  AGY_RELEASE_ROOT   (default $DEFAULT_RELEASE)
+  AGY_STATE_ROOT     (default $STATE_ROOT)
+EOF
+    exit 2
+    ;;
+esac

@@ -1,0 +1,21 @@
+# AGY Hybrid runtime dependencies (P19-D).
+#
+# Pinned to what the accepted release runtime actually imports. Install with:
+#   pip install -r requirements.txt
+# ...into an isolated venv (NEVER `pip --break-system-packages`). The
+# `scripts/agy-hybrid-release bootstrap` command verifies these against the
+# live interpreter and fails explicitly when one is missing.
+#
+# Core (deterministic runtime + MCP gateway + schemas):
+mcp>=2.1,<3
+pydantic>=2.7,<3
+# P17 tool-free planner transport (the production cloud planner). Plain,
+# non-agentic completion — no tools, no MCP, no shell, no filesystem.
+google-genai>=2.25,<3
+# P9.2 legacy agentic run-task path (classification B — restricted/
+# experimental, NOT the production planner). Kept so the legacy path keeps
+# working; the tool-free path does not depend on it.
+# NOTE: the P12 live-proof record cited google-antigravity==0.1.20; the
+# version VERIFIED installed and working on this host (both venvs) is
+# 0.1.18 — pinning to the verified version rather than the cited one.
+google-antigravity==0.1.18
