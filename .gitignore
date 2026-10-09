@@ -1,20 +1,29 @@
-# .gitignore
+# Python & Environment
 .venv/
 .env
 .env.*
-state/
-logs/
+!.env.example
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.pre-verdict-parser
+
+# Runtime State & Logs
+state/
+logs/
+*.log
+*.dump
+.pytest_cache/
+.serena/
+graphify-out/
+test-workspace/
+
+# Local Recovery Artifacts
+recovery/investigator/*.dump
+recovery/investigator/acceptance/
+
+# IDE & System
 .DS_Store
-.git/
 .vscode/
 .idea/
-.pytest_cache/
-
-# Local recovery/runtime artifacts
-recovery/investigator/*.dump
-recovery/investigator/acceptance/*.json
-test-workspace/

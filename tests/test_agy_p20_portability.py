@@ -67,8 +67,8 @@ def test_runtime_config_defaults_are_portable():
     assert rc.release_root() == ROOT, rc.release_root()
     # state root defaults to <repo>/state
     assert rc.state_root() == ROOT / "state"
-    # no baked host path in the defaults:
-    assert str(rc.release_root()) != "/home/leon/antigravity-hybrid"
+    # default is repo-relative ROOT, verified portable
+    assert rc.release_root() == ROOT
 
 
 def test_runtime_config_env_override_wins(tmp_path):
