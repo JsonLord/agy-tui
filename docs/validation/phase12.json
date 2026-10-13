@@ -211,5 +211,13 @@
       "version": "0.54.0",
       "license_metadata": "BSD-3-Clause"
     }
-  ]
+  ],
+  "implementation_commit": "6b71f48d6f40d76f7b22708e8b0b2d1fb8492613",
+  "audit_at_implementation_commit": {
+    "commits": 44,
+    "commit_objects": 44,
+    "historical_blobs": 293,
+    "unreferenced_blobs": 0,
+    "strong_credential_matches": 0
+  }
 }

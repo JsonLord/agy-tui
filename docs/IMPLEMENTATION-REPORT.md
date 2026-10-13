@@ -108,7 +108,10 @@ pushing this branch on 2026-10-13. The separate recommended private destination
 is unconfirmed and not used. No remote creation, force push, other branch change,
 original Debian change, corporate data access or deployment is authorized/performed.
 
-The following evidence-only commit records the exact checked reconstruction SHA
-and final audit results. A report cannot include its own SHA without changing it.
+Checked reconstruction implementation SHA: `6b71f48d6f40d76f7b22708e8b0b2d1fb8492613`.
+The implementation-commit all-object rescan covered 44 commits and
+293 blobs (0 unreferenced), with zero strong credential findings.
+The following evidence-only commit records that exact SHA and changes no runtime
+code. A report cannot include its own SHA without changing it.
 Versioned evidence: docs/validation/phase12.json. Final remote verification is
 reported after the authorized push; do not treat local commit as push evidence.

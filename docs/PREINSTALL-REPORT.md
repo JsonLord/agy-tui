@@ -103,3 +103,8 @@ hash-pinned dependency installation, stdio tools/status without a provider,
 unchanged existing server/preferences, no retained private environment sentinel,
 owned source/venv deletion and workspace/evidence retention. Cloud setup helper
 was also executed successfully. See CLOUD-VALIDATION and operating docs.
+
+Checked reconstruction implementation SHA: `6b71f48d6f40d76f7b22708e8b0b2d1fb8492613`.
+Its all-object audit covered 44 commits and 293 blobs, with zero strong
+credential findings. The evidence-only commit records this SHA; final push is
+verified against the actual remote ref after transfer.
