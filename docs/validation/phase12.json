@@ -1,0 +1,215 @@
+{
+  "phase": "1.2 recreation",
+  "base_commit": "74f5e2434dd135c7a314b781b531494656a697ed",
+  "branch": "implementation/argus-phase01",
+  "former_commits_unavailable": true,
+  "not_byte_identical_recovery": true,
+  "versions": {
+    "python": "3.12.14",
+    "node": "24.19.0",
+    "opencode": "1.18.35",
+    "powershell": "7.5.3",
+    "mcp": "2.3.0",
+    "pydantic": "2.14.0"
+  },
+  "checks": {
+    "recreated_unit": 22,
+    "recreated_real_acp_synthetic": 4,
+    "recreated_readiness": 34,
+    "unchanged_legacy_core": 40,
+    "passed": 100,
+    "failed": 0,
+    "skipped": 0,
+    "legacy_warnings": 1
+  },
+  "full_transaction": [
+    "INSTALLED",
+    "HEALTHY",
+    "UNINSTALLED"
+  ],
+  "platform": "Linux (PowerShell Linux, not native Windows)",
+  "native_windows": "PENDING",
+  "production_gates": "DEFERRED_TO_PHASE_1_5",
+  "initial_audit": {
+    "commits": 43,
+    "all_blobs": 258,
+    "unreachable_blobs": 0,
+    "strong_credential_matches": 0,
+    "history_rewritten": false,
+    "legacy_personal_paths_and_author_emails_retained": true
+  },
+  "remote": "https://github.com/JsonLord/agy-tui.git",
+  "push_authorized": true,
+  "deployment": false,
+  "portable_source_manifest": {
+    "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "app/schemas.py": "564f4d55f34c8709608aa874ea7171633bf286dd765b8f0702bd8d9f02dc6bdd",
+    "requirements-windows.lock": "4dca0b37d18af6259ecc4e4251c957ee141fabf2dd868471e13bea10bd39c520",
+    "scripts/hybrid-local.py": "84fb7160c7fc18c66ccbf2939f4b449c1505d597f176096d72376ac51a02398a",
+    "scripts/install-smoke.py": "2b0fd05aaa8bda7f8e0beb6868be6e35c8a31c3b22f55be1f10e9c9b392a0a86",
+    "scripts/workspace-discovery.py": "fff45c5981be78afaa7e28d72b0758f900090cab7d687a6b9a86d4375f88e81a",
+    "scripts/windows-readiness.py": "a1b263f13ec68d25a30f719d6596a172675ee1be3a7e36514b5b031fb1b9721c",
+    "scripts/install-windows.ps1": "0098d0884714ed3c806d0331b899e5bc072c3a2bb7112043386f123146e80f7e",
+    "scripts/doctor-windows.ps1": "8d7267b0c040d2c1fe1f6fcc4652cfff7b8a633f9ddd1ad3e40fe0336128e73c",
+    "scripts/uninstall-windows.ps1": "cd7b07631cc01180e068d644280fcdaa38a445d4b0086e1a8148d0275b4c2b25",
+    "app/hybrid_local/__init__.py": "83b7d544c27bc710accb69a6ebf3807558dd9f7e8e3c329fd1391c7d784feeda",
+    "app/hybrid_local/acp.py": "8a5d4479fa028a0bd2e0571b6664ea943d16c8d765775f1156be58480413218c",
+    "app/hybrid_local/discovery.py": "a0772421f271691fdaadce38f7d0ab073247ccd2d2a20f3e57c8f625b73f6ba2",
+    "app/hybrid_local/installation.py": "0f3bce9626d80d3b19bc74883239afffba39e0b2286b8cf1b231b4b278da2551",
+    "app/hybrid_local/mcp.py": "66041ec1873f8816517366947e364e8a6cb914784af6d1c3b07623e82280b4a7",
+    "app/hybrid_local/policy.py": "8c59d620fc3f84c595242567c9ded816b93100b64e74fa17e08e7f7b42c6e851",
+    "app/hybrid_local/service.py": "5c042d8abbe6bea5522c259c0522ab573474ea1f27cee007d6ca4dbbabda97e3",
+    "app/hybrid_local/store.py": "1af09ac0987ddf6643819a5a097671c2ece669c4b19b0208602f18bea315513e",
+    "app/hybrid_local/windows.py": "900ff1f00da296e2c1109a603954cbc8cdcebc90b0d880e6b4ad5a68752ff29c"
+  },
+  "runtime_dependency_license_metadata": [
+    {
+      "package": "annotated-types",
+      "version": "0.8.0",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "anyio",
+      "version": "4.15.1",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "attrs",
+      "version": "26.1.0",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "cffi",
+      "version": "2.1.1",
+      "license_metadata": "MIT-0"
+    },
+    {
+      "package": "click",
+      "version": "8.5.0",
+      "license_metadata": "BSD-3-Clause"
+    },
+    {
+      "package": "cryptography",
+      "version": "50.0.2",
+      "license_metadata": "Apache-2.0 OR BSD-3-Clause"
+    },
+    {
+      "package": "h11",
+      "version": "0.16.0",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "httpcore2",
+      "version": "2.13.1",
+      "license_metadata": "BSD-3-Clause"
+    },
+    {
+      "package": "httpx2",
+      "version": "2.13.1",
+      "license_metadata": "BSD-3-Clause"
+    },
+    {
+      "package": "httpx2-jsfetch",
+      "status": "not installed on Linux (platform marker)"
+    },
+    {
+      "package": "idna",
+      "version": "3.20",
+      "license_metadata": "BSD-3-Clause"
+    },
+    {
+      "package": "jsonschema",
+      "version": "4.26.0",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "jsonschema-specifications",
+      "version": "2025.9.1",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "mcp",
+      "version": "2.3.0",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "mcp-types",
+      "version": "2.3.0",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "opentelemetry-api",
+      "version": "1.45.1",
+      "license_metadata": "Apache-2.0"
+    },
+    {
+      "package": "pycparser",
+      "version": "3.11",
+      "license_metadata": "BSD-3-Clause"
+    },
+    {
+      "package": "pydantic",
+      "version": "2.14.0",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "pydantic-core",
+      "version": "2.50.0",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "pyjwt",
+      "version": "2.15.1",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "python-multipart",
+      "version": "0.0.32",
+      "license_metadata": "Apache-2.0"
+    },
+    {
+      "package": "pywin32",
+      "status": "not installed on Linux (platform marker)"
+    },
+    {
+      "package": "referencing",
+      "version": "0.37.0",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "rpds-py",
+      "version": "2026.9.1",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "sse-starlette",
+      "version": "3.5.0",
+      "license_metadata": "BSD-3-Clause"
+    },
+    {
+      "package": "starlette",
+      "version": "1.8.0",
+      "license_metadata": "BSD-3-Clause"
+    },
+    {
+      "package": "truststore",
+      "version": "0.10.5",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "typing-extensions",
+      "version": "4.16.0",
+      "license_metadata": "PSF-2.0"
+    },
+    {
+      "package": "typing-inspection",
+      "version": "0.4.4",
+      "license_metadata": "MIT"
+    },
+    {
+      "package": "uvicorn",
+      "version": "0.54.0",
+      "license_metadata": "BSD-3-Clause"
+    }
+  ]
+}

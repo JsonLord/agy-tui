@@ -18,3 +18,12 @@ __pycache__/
 recovery/investigator/*.dump
 recovery/investigator/acceptance/*.json
 test-workspace/
+
+# Portable hybrid-local environments and local evidence
+.venv-hybrid/
+.venv-argus/
+.ruff_cache/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+/config/workspaces.local.json
