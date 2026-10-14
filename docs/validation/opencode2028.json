@@ -58,5 +58,33 @@
     "app/hybrid_local/service.py": "4deb786d629141236d04c73ca621da082284010f08ec2886213f38fd69214fd1",
     "app/hybrid_local/store.py": "1af09ac0987ddf6643819a5a097671c2ece669c4b19b0208602f18bea315513e",
     "app/hybrid_local/windows.py": "e50b3511f1fc4adbad6ec606190cc7a4c5112eb2d707a338165708e87d468ed1"
-  }
+  },
+  "checked_adaptation_commit": "8511928838e1c0756905e4fd12b896e5a40f1aad",
+  "audit_at_adaptation_commit": {
+    "commits": 47,
+    "historical_blobs": 317,
+    "unreferenced_blobs": 0,
+    "strong_credential_matches": 0
+  },
+  "files_changed_since_start": [
+    "app/hybrid_local/acp.py",
+    "app/hybrid_local/capabilities.py",
+    "app/hybrid_local/installation.py",
+    "app/hybrid_local/service.py",
+    "app/hybrid_local/windows.py",
+    "docs/CLOUD-VALIDATION.md",
+    "docs/IMPLEMENTATION-REPORT.md",
+    "docs/MCP-REGISTRATION.md",
+    "docs/OPENCODE-2X-EVIDENCE.md",
+    "docs/ROLLBACK.md",
+    "docs/WINDOWS-INSTALL.md",
+    "docs/validation/opencode2028.json",
+    "scripts/doctor-windows.ps1",
+    "scripts/install-windows.ps1",
+    "scripts/opencode-doctor.py",
+    "tests/test_opencode_capabilities.py",
+    "tests/test_opencode_resolution.py",
+    "tests/test_owned_process_shutdown.py",
+    "tests/test_windows_readiness.py"
+  ]
 }

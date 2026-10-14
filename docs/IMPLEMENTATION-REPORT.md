@@ -241,3 +241,9 @@ INSTALLED/USER_ACTION_REQUIRED → HEALTHY/UNVERIFIED_MANUAL → UNINSTALLED,
 with client JSON unchanged throughout. Native Windows and live 2.x remain
 unrun; 2.x workers remain deliberately blocked, not accepted as ready.
 Fresh versioned evidence: `docs/validation/opencode2028.json`.
+
+Checked safe-adaptation commit: `8511928838e1c0756905e4fd12b896e5a40f1aad`.
+Its all-object scan covered 47 commits and 317 blobs, zero strong
+credential matches. The following documentation/evidence-only commit records
+this exact SHA and does not change runtime code. Operational 2.x remains blocked
+under the strict contract; no native compatibility claim is made.
