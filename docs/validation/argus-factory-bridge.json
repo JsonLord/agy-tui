@@ -1,0 +1,106 @@
+{
+  "base_sha": "7d48d3c8fa7d2de1ee25bbb63ae0f2e3673a8bc9",
+  "work_branch": "integration/argus-factory-bridge",
+  "checked_implementation_sha": "f9e60f691f3f9843c8ae96ccc82f851ce2f52871",
+  "argus_source": {
+    "repository": "https://github.com/lbx154/Argus",
+    "tag": "v0.1.1",
+    "tag_object": "9e3f8d10cda39161c1d43bb390ed27c914ef59b1",
+    "commit": "9202c80f1aa221e7583eee1052158b244cca442b",
+    "archive_sha256": "666b2547d8740344d9f520b9beacfcdf3e20b8eeab283f1ba36a72fc5353bd71",
+    "inspected_not_executed": true
+  },
+  "argus_tools_used": [
+    "argus_project_list",
+    "argus_status",
+    "argus_artifacts",
+    "argus_message"
+  ],
+  "message_route": "/ask prefix; Manager inline; no native Planner/Engineer dispatch",
+  "plan_protocol": "AGY_FACTORY_PLAN strict single JSON sentinel; not native Argus plan schema",
+  "review_protocol": "AGY_FACTORY_REVIEW; REVIEW_ROLE_IS_LOGICAL_NOT_TRANSPORT_SEPARATE",
+  "review_verdicts": [
+    "ACCEPTED",
+    "MORE_WORK_REQUIRED",
+    "BLOCKED",
+    "ESCALATE"
+  ],
+  "workspace_resolution": "explicit read-only AGY mapping + live MCP project ID/workdir matching; import compares registered identities",
+  "planning_auto_approves": false,
+  "planning_auto_materializes": false,
+  "review_changes_execution": false,
+  "replan_is_recommendation_only": true,
+  "idempotency": "Atomic native project/source-ref/revision import and durable kind/scope-hashed request intent; no uncertain message replay",
+  "new_read_tools": [
+    "factory_argus_status",
+    "factory_argus_plan_preview",
+    "factory_argus_reviews"
+  ],
+  "new_control_tools": [
+    "factory_plan_goal",
+    "factory_import_argus_plan",
+    "factory_review_completion"
+  ],
+  "packaging": "existing source allowlist includes AGY factory/Argus bridge/unchanged Automaker adapter and launchers; no Argus wheel/runtime; manual registration only",
+  "new_tests": 60,
+  "focused_passed": 239,
+  "focused_skipped": 1,
+  "legacy_passed": 40,
+  "total_passed": 279,
+  "total_failed": 0,
+  "skip": "PowerShell/OpenCode installation dry-run intentionally not run",
+  "warning": "Existing legacy PytestReturnNotNoneWarning",
+  "validation": {
+    "actual_stdio_fake_argus": "PASSED",
+    "request_import_restart": "PASSED",
+    "timeout_crash_cancel_shutdown": "PASSED",
+    "unrelated_process_preserved": "PASSED",
+    "packaged_stdio_factory_without_argus_or_opencode": "PASSED",
+    "lint_format_compile_diff": "PASSED",
+    "live_argus": "NOT_RUN",
+    "native_windows": "NOT_RUN",
+    "local_opencode": "NOT_REQUIRED_NOT_INVOKED",
+    "upstream_tests": "INSPECTED_NOT_EXECUTED"
+  },
+  "foreman_dependency": "none",
+  "laya_dependency": "none",
+  "execution_or_config_mutations": false,
+  "audit": {
+    "commits": 52,
+    "blobs": 360,
+    "unreferenced_blobs": 0,
+    "strong_token_key_matches": 0,
+    "broad_matches": "Legacy environment identifiers and synthetic credential URL fixture",
+    "privacy": "Legacy personal paths and author metadata retained; no history rewrite"
+  },
+  "limitations": [
+    "Installed Argus version not established by tool-schema match",
+    "Manager-only planning and logical review, no independent native role isolation",
+    "Native task refs may be null; supplied refs preserved, not independently verified",
+    "Manual approval provenance remains operator assertion",
+    "Unknown/invalid outcomes require operator reconciliation",
+    "Evidence refs/summary only; no automatic artifact fetching or execution",
+    "Real Argus and Windows pending"
+  ],
+  "files_changed": [
+    ".gitignore",
+    "app/argus_local/__init__.py",
+    "app/argus_local/client.py",
+    "app/argus_local/config.py",
+    "app/argus_local/protocol.py",
+    "app/argus_local/security.py",
+    "app/argus_local/service.py",
+    "app/argus_local/store.py",
+    "app/argus_local/transport.py",
+    "app/factory_local/mcp.py",
+    "app/hybrid_local/installation.py",
+    "docs/ARGUS-FACTORY-BRIDGE.md",
+    "docs/FACTORY-CONTROL-PLANE.md",
+    "docs/IMPLEMENTATION-REPORT.md",
+    "scripts/argus-factory-doctor.py",
+    "tests/fixtures/fake_argus_mcp.py",
+    "tests/test_argus_factory_bridge.py",
+    "tests/test_factory_local.py",
+    "docs/validation/argus-factory-bridge.json"
+  ]
+}
