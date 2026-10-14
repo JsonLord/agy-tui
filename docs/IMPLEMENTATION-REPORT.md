@@ -115,3 +115,16 @@ The following evidence-only commit records that exact SHA and changes no runtime
 code. A report cannot include its own SHA without changing it.
 Versioned evidence: docs/validation/phase12.json. Final remote verification is
 reported after the authorized push; do not treat local commit as push evidence.
+
+## 2026-10-14 resolver port before OpenCode 2.x work
+
+Starting fetched remote: `bedba8c4434a0834ed46ca546753f1ae58fe5ae3`.
+The separately described Windows resolver/native validation reports are not
+present in the branch. Their native validation/~118-test claims are not adopted.
+Ported current `@opencode/cli` package-metadata/bin resolution, `.cmd`/`.ps1`/
+extensionless locator discovery without reading/executing shims, old npm layouts
+and precise resolution failures. Metadata path escapes/missing native images fail
+closed. Selected resolver checks: 10 passed (9 new + existing old-layout case).
+These are synthetic Linux contracts; native Windows validation remains pending.
+The resolver port is committed independently before layering capability/manual
+registration changes, without rewriting the fetched branch history.
