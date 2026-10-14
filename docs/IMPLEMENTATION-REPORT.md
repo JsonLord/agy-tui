@@ -348,3 +348,77 @@ rewritten. New code/state contains no persisted API credential. Exact checked
 implementation SHA and post-commit audit are recorded in the next evidence commit.
 
 Checked factory implementation commit: `5001fa40d6ef785b328244f06c04b2bd1fe967a5`. Post-commit audit: 50 commits, 340 blobs, zero strong token/key matches; synthetic credential-URL and legacy identifier findings reviewed. Versioned evidence: `docs/validation/factory-control-plane.json`. The next commit records evidence without changing runtime code.
+
+## 2026-10-14 external Argus factory bridge
+
+Base: `7d48d3c8fa7d2de1ee25bbb63ae0f2e3673a8bc9`; fetched validation branch
+matched exactly, compatible work preserved. Clean child branch:
+`integration/argus-factory-bridge`. Foreman/Jules branch and deployment untouched.
+
+Inspected `lbx154/Argus` tag v0.1.1 (annotated object
+`9e3f8d10cda39161c1d43bb390ed27c914ef59b1`, commit
+`9202c80f1aa221e7583eee1052158b244cca442b`) MCP/service/Manager routes,
+status/artifact/project schemas, docs and tests. No package installation,
+execution, modification or vendoring. Source evidence and translation mapping:
+`docs/ARGUS-FACTORY-BRIDGE.md`.
+
+Important source finding: ordinary argus_message can enqueue work/start daemon.
+The actual `/ask` route returns Manager inline chat without backlog dispatch.
+All bridge messages therefore use `/ask`, never ordinary goals. MCP exposes no
+complete native factory DAG or separate Reviewer operation: strict AGY plan and
+review sentinel/JSON contracts are requested, with Manager-only planning advice
+and **REVIEW_ROLE_IS_LOGICAL_NOT_TRANSPORT_SEPARATE**, not native Planner/Reviewer
+execution/isolation claims. Live target behavior/version is not validated.
+
+Implemented explicit typed Argus stdio client (four fixed tools), tools-list
+schema checks, bounded owned child transport/shutdown, redacted error/correlation
+responses, strict imports and known project/workspace/repository/path resolution.
+Imported plans remain PROPOSED initially, existing revision-bound approval and
+materialization remain separate. Compact richer review verdicts normalize into
+FactoryCompletion.accepted without changing Automaker state. Replanning remains
+advice; a revised plan requires a new ID/revision/approval. Evidence inputs are
+bounded references/summary only, never automatically fetched repositories/logs.
+Recognizable credential-shaped input/output is rejected; operators still sanitize
+business data. No private Argus/native credential files are read/copied, no
+backend/model/provider selection or configuration mutation is introduced.
+
+AGY-only reference tables extend existing SQLite WAL/FULL persistence. Atomic
+project/source-ref/revision import prevents conflicting duplicates; hashed
+request IDs reserve generative intent before message delivery, cached completion
+is returned on replay, incomplete outcomes block automatic replay even after
+restart. No full prompts/chat transcripts or external worker state are persisted.
+Read preflight failure leaves no message intent and can be retried. Post-delivery
+invalid output remains blocked for explicit reconciliation/status inspection.
+
+Six new factory MCP tools: READ argus_status/argus_plan_preview/argus_reviews;
+CONTROL plan_goal/import_argus_plan/review_completion (all factory_ prefixed).
+Thirteen total tools; existing seven retain their semantics. Existing factory
+stdio count assertion updated solely for the intentional additive surface.
+Manual fragments and read-only executable/schema doctor added. Packaging's source
+allowlist includes factory/bridge/unchanged Automaker adapters and launchers; this
+is the only hybrid-local change, needed for a self-contained packaged factory
+launcher. Dependency locks/prerequisite preflight/model safeguards/registration
+behavior remain unchanged. Argus is independently installed, never bundled.
+
+Fresh Linux checks: **239 passed, 1 skipped** across 60 new Argus bridge tests and
+179 existing factory/Automaker/hybrid/capability/resolver/shutdown/readiness tests;
+plus **40 unchanged legacy core passed**, one pre-existing return-value warning.
+Total **279 passed, 1 skipped, 0 failed**. Skipped: PowerShell/OpenCode install
+dry-run, intentionally excluded here; real OpenCode provider cases not run.
+Real stdio fake-MCP tests prove typed tool compatibility, goal/review handoffs,
+crash/timeout/cancel, no replay, owned shutdown/unrelated-process survival and
+restart persistence. Packaged stdio factory launcher smoke passed from Unicode/
+space paths with neither Argus nor OpenCode installed in that fixture, returning
+ARGUS_NOT_INSTALLED honestly. Ruff/format/compile/whitespace checks passed.
+Actual Argus/Windows/backend/provider/production integrations remain **NOT RUN**.
+No new cloud setup/draft was necessary: existing isolated dependencies sufficed.
+
+Audit before commit: 51 commits/342 historical blobs, zero strong key/token
+matches. Credential-literal findings remain legacy environment identifiers;
+credential URLs remain synthetic negative fixtures. New bridge files have no
+findings; legacy personal paths/emails retained/disclosed, no history rewrite.
+Exact checked implementation SHA/post-commit audit are recorded by the following
+versioned evidence commit. Remote remains https://github.com/JsonLord/agy-tui.git.
+No public ports, worker/executor/auto-mode/ClickUp/PR/CI orchestration, native MCP
+config edit, Foreman/Laya code change, push to another branch, force push or
+production deployment is performed by this phase.

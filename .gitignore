@@ -27,3 +27,9 @@ test-workspace/
 *.sqlite3-wal
 *.sqlite3-shm
 /config/workspaces.local.json
+
+# AGY factory control-plane runtime (keep outside checkout where possible)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+/config/factory-projects.local.json

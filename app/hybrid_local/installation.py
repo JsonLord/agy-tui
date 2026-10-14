@@ -156,6 +156,9 @@ def portable_files(source):
         "app/schemas.py",
         "requirements-windows.lock",
         "scripts/hybrid-local.py",
+        "scripts/factory-local.py",
+        "scripts/argus-factory-doctor.py",
+        "scripts/automaker-local.py",
         "scripts/install-smoke.py",
         "scripts/workspace-discovery.py",
         "scripts/windows-readiness.py",
@@ -168,6 +171,11 @@ def portable_files(source):
         str(p.relative_to(source))
         for p in sorted((source / "app/hybrid_local").glob("*.py"))
     )
+    for namespace in ("factory_local", "argus_local", "automaker_local"):
+        names.extend(
+            str(p.relative_to(source))
+            for p in sorted((source / "app" / namespace).glob("*.py"))
+        )
     paths = [source / name for name in names]
     if not all(p.is_file() and not p.is_symlink() for p in paths):
         raise InstallError("SOURCE_INCOMPLETE: use a complete reviewed checkout")

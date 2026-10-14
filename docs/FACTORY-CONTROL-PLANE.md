@@ -201,3 +201,21 @@ space/non-ASCII state paths, canonical API mapping and live status changes, plus
 concurrent claims, approval guards, DAG validation, lost-response reconciliation,
 conflicts, transaction rollback, bounded errors and fake executor seam. No local
 OpenCode executable or real external service is required or invoked.
+
+## Argus bridge follow-on
+
+The child branch `integration/argus-factory-bridge` adds the external stdio MCP
+client, strict Manager `/ask` planning/review envelopes, operator project mapping,
+idempotent import/generation intent and compact review records. Planning remains
+PROPOSED; review never marks Automaker state or silently replans. The new read
+surface exposes live Argus metadata/import previews/review results separately
+from canonical Automaker job status. Details/source evidence and manual fragments:
+[ARGUS-FACTORY-BRIDGE.md](ARGUS-FACTORY-BRIDGE.md).
+
+The older “not bundled” note above describes the original foundation: the hybrid
+installer now packages factory/bridge/Automaker adapter code and launchers alongside
+hybrid-local. Argus itself remains independently installed, and factory-only use
+needs no OpenCode. Existing registration remains manual. `/ask` provides
+Manager-only planning/review advice, not native Planner or isolated Reviewer
+execution. Approval authentication, execution, evidence collection and live-device
+validation remain future gates; this update does not claim they are implemented.

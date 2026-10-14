@@ -425,7 +425,7 @@ def test_stdio_restart_real_client_boundary(tmp_path):
     async def session(first):
         async with stdio_client(params) as streams, ClientSession(*streams) as client:
             await client.initialize()
-            assert len((await client.list_tools()).tools) == 7
+            assert len((await client.list_tools()).tools) == 13
 
             async def call(name, arguments):
                 result = await client.call_tool(name, arguments)
