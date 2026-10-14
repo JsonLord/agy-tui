@@ -247,3 +247,53 @@ Its all-object scan covered 47 commits and 317 blobs, zero strong
 credential matches. The following documentation/evidence-only commit records
 this exact SHA and does not change runtime code. Operational 2.x remains blocked
 under the strict contract; no native compatibility claim is made.
+
+## automaker-local Phase 1 MCP adapter
+
+First portable integration component of the local software-factory stack
+(AGY UI -> Argus plan -> ClickUp approval -> Automaker Kanban/jobs -> Foreman
+-> Laya + OpenCode). Only the AGY <-> Automaker MCP link is implemented here;
+Foreman, Laya, ClickUp, Argus planning and OpenCode worker integration are
+not part of this change and this adapter does not synchronize ClickUp.
+
+`app/automaker_local/` adds a stdio-only MCP server (`automaker-local`)
+proxying a fixed, typed endpoint subset of the verified local Automaker API
+(AutoMaker-Org/automaker `main` @ `5888d2e6f3618e06762803687ea7b181c10edcbd`,
+`http://127.0.0.1:3008`). Automaker stays authoritative for projects, jobs
+(features), worker state, auto-mode, worktrees, PRs and scheduling. The
+adapter never reads or writes Automaker source, `data/`, database,
+`.api-key`, or configuration, starts/stops nothing, and binds no listener.
+
+READ tools (state-neutral): `automaker_health`, `automaker_projects`,
+`automaker_jobs`, `automaker_job_status`, `automaker_running_agents`,
+`automaker_autonomy_status` (POST verb, read semantics), `automaker_backlog_status`.
+CONTROL tools (mutating, explicit operator/agent actions pending a future
+ClickUp approval tier): `automaker_job_create`, `automaker_job_update`,
+`automaker_worker_start`, `automaker_worker_stop`. Delete, bulk, agent-model,
+queue, send, auto-mode start/stop, backlog apply, spec-regeneration and any
+generic HTTP access are deliberately not exposed. Classification is declared
+once in `policy.TOOL_CLASSES` and never inferred from HTTP verbs.
+
+Security contract: base URL defaults to `http://127.0.0.1:3008` and fails
+closed unless the host is exactly `127.0.0.1`/`localhost`/`[::1]` over plain
+http without credentials or path (LAN, `0.0.0.0` and remote URLs are
+rejected; no remote mode exists). `AUTOMAKER_API_KEY` is required from the
+operator environment, is never logged or returned, and cannot appear in
+error text because failures are stable codes only
+(`AUTOMAKER_UNAVAILABLE/AUTH_FAILED/BAD_RESPONSE/TIMEOUT/NOT_FOUND/CONFLICT/REQUEST_REJECTED/LOCAL_CONFIGURATION_REQUIRED`).
+At the verified Automaker SHA the receiving auth scheme is `X-API-Key`
+(`lib/auth.ts`); the adapter sends `X-API-Key` plus the contract's
+`Authorization: Bearer` header (ignored by current Automaker, honored by a
+Bearer-capable future version). Requests are JSON-only with content-type and
+size bounds, no system-proxy routing, one conservative connect retry for
+reads only, and zero retries for mutations. Raw server error bodies are
+discarded. Manual registration only (`docs/AUTOMAKER-MCP.md`); no client MCP
+config is read or written.
+
+Evidence: 52 isolated tests in `tests/test_automaker_local.py` run against a
+synthetic fake localhost HTTP server (endpoint mapping, normalization,
+localhost policy, secret-leak sweeps, all failure codes, exact 11-tool
+stdio surface). These are synthetic tests, not live-device proof. Live
+native validation is documented as a manual read-only loopback procedure
+(HOST=127.0.0.1 + `scripts/automaker-doctor.py`) and has not been executed
+against a real Automaker process in this commit.

@@ -79,14 +79,21 @@ def test_overlapping_roots_rejected(registered):
 
 
 def test_traversal_denied(registered):
-    with pytest.raises(HybridError, match="PATH_OUTSIDE_WORKSPACE"):
+    # Native Windows rejects traversal earlier via the path-syntax gate; both
+    # outcomes are fail-closed denials of the same escape attempt.
+    with pytest.raises(
+        HybridError, match="PATH_OUTSIDE_WORKSPACE|UNSUPPORTED_WINDOWS_PATH"
+    ):
         registered[1].get("finance").file("../escape.txt")
 
 
 def test_symlink_escape_denied(registered, tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
-    (registered[2][0] / "src/link").symlink_to(outside, target_is_directory=True)
+    try:
+        (registered[2][0] / "src/link").symlink_to(outside, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"native Windows lacks symlink privilege: {error.winerror}")
     with pytest.raises(HybridError, match="PATH_OUTSIDE_WORKSPACE"):
         registered[1].get("finance").file("src/link/private.txt", write=True)
 

@@ -162,7 +162,10 @@ def test_manual_install_fragment_doctor_explicit_only(tmp_path, monkeypatch):
     source = Path(__file__).resolve().parents[1]
     result = installer.install(source, root, None, "native", "node")
     assert result["registration_status"] == "USER_ACTION_REQUIRED"
-    assert json.loads((root / "mcp-entry.json").read_text()) == result["mcp_entry"]
+    assert (
+        json.loads((root / "mcp-entry.json").read_text(encoding="utf-8"))
+        == result["mcp_entry"]
+    )
     assert config.read_bytes() == before
     original = installer.config_document
     monkeypatch.setattr(
