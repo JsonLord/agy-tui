@@ -297,3 +297,52 @@ stdio surface). These are synthetic tests, not live-device proof. Live
 native validation is documented as a manual read-only loopback procedure
 (HOST=127.0.0.1 + `scripts/automaker-doctor.py`) and has not been executed
 against a real Automaker process in this commit.
+
+## 2026-10-14 factory control-plane foundation
+
+User-provided factory prompt overrides the older runtime architecture for this
+phase: external argus-skill 0.1.1 (lbx154/Argus) is planning/review authority,
+Automaker owns execution jobs/scheduling, Foreman/OpenCode remain future workers.
+Base fetched and inspected: `44d6356ebb25b3d6a1ff1303a39b5f902899ff29`.
+Work branch: `integration/factory-control-plane`; validation branch untouched.
+
+Implemented AGY-only interchange schemas, separate approval/execution vocabulary,
+immutable revision-bound manual assertions, SQLite WAL/FULL reference registry,
+conditional create intents and conservative lost-response reconciliation,
+project/dependency validation, live Automaker read aggregation and seven narrow
+stdio MCP tools. Reuses unchanged AutomakerClient/JobCreateInput; no edits to
+hybrid-local or automaker-local. Upstream dependency/create source inspected at
+Automaker `5888d2e6f3618e06762803687ea7b181c10edcbd`. No vendored/implemented
+Argus runtime, Foreman dependency, worker launch, shell, auto-mode mutation,
+ClickUp call, OpenCode invocation/config/provider/model change, client MCP edit,
+public port, external runtime-file access or deployment.
+
+Fresh Linux synthetic validation: **179 passed, 1 skipped** (factory36 + existing
+Automaker52/hybrid22/capability24/resolver9/shutdown3/readiness33; PowerShell/
+OpenCode install dry run skipped), plus unchanged legacy core **40 passed** with
+one existing return-value warning. Total **219 passed, 1 skipped, 0 failed**.
+Actual stdio subprocess restart against a synthetic loopback Automaker API proves
+three mapped jobs/dependencies, no duplicate creates, live status and Unicode/
+space state paths. Concurrent claims, partial failure recovery and atomic rollback
+passed. Ruff/format/compile and Git whitespace checks passed. No real OpenCode,
+Automaker, Argus, Foreman or target Windows test performed in this phase.
+
+Known limits: manual actor refs are operator assertions, not externally verified
+human identity; restrict CONTROL approval access in the client. Approval scope
+is an entire immutable plan (partial approval via separate envelopes), revisions
+need new IDs. Ambiguous creates with no match intentionally block for operator
+investigation. Native dependencies are project-local; cross-project edges are
+rejected. External auto-mode must remain off: observation cannot atomically lock
+another Automaker client. Evidence collection/review, Foreman handoff and factory
+bundling in the existing hybrid installer are future work. Schema/protocol seams
+are ready for adapters, not live integration claims. Details and reproducible
+commands: `docs/FACTORY-CONTROL-PLANE.md`.
+
+Existing isolated environments support these tests without installation, services
+or configuration changes; no new cloud draft was necessary/saved. Git all-object
+and nonignored-file audit before commit: 49 commits, 331 blobs, no unreachable
+blobs. No private keys/provider/GitHub tokens found. Broad credential-literal
+matches are legacy environment identifiers; credential-URL matches are a synthetic
+negative-policy test. Legacy personal paths/emails remain disclosed, history not
+rewritten. New code/state contains no persisted API credential. Exact checked
+implementation SHA and post-commit audit are recorded in the next evidence commit.
