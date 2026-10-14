@@ -94,7 +94,15 @@ class HybridLocal:
                 else "LOCAL_EXECUTION_ERROR"
             )
             self.store.finish(
-                key, "REMOTE_STOP_UNCONFIRMED" if client.prompting else "FAILED", code
+                key,
+                "REMOTE_STOP_UNCONFIRMED"
+                if client.prompting
+                or (
+                    getattr(client, "process", None) is not None
+                    and not getattr(client, "termination_confirmed", False)
+                )
+                else "FAILED",
+                code,
             )
             if isinstance(error, asyncio.CancelledError):
                 raise

@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import signal
 
+from .capabilities import probe_capabilities
 from .policy import HybridError, native_environment, permission_response
 from .windows import OwnedWindowsJob, native_binary, process_options
 
@@ -26,24 +29,25 @@ class OpenCodeACP:
         self.environment = native_environment(workspace, role, environment)
         self.audit = audit or (lambda *_: None)
         self.process = self.reader = self.stderr = self.job = None
+        self.exit_monitor = None
         self.pending, self.sequence = {}, 0
         self.session_id = self.model = self.text = ""
         self.prompting = False
         self.failure = None
+        self.termination_confirmed = False
 
     async def __aenter__(self):
         self.workspace.validate()
         try:
+            binary = native_binary(self.binary)
+            contract = await probe_capabilities(
+                binary, self.environment, self.workspace.root
+            )
+            contract.require_worker()
+            self.contract = contract
             self.process = await asyncio.create_subprocess_exec(
-                native_binary(self.binary),
-                "acp",
-                "--pure",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                "0",
-                "--cwd",
-                str(self.workspace.root),
+                binary,
+                *contract.acp_arguments(self.workspace.root),
                 cwd=self.workspace.root,
                 env=self.environment,
                 stdin=asyncio.subprocess.PIPE,
@@ -55,6 +59,7 @@ class OpenCodeACP:
             self.job = OwnedWindowsJob(self.process.pid)
             self.reader = asyncio.create_task(self._read())
             self.stderr = asyncio.create_task(self._drain())
+            self.exit_monitor = asyncio.create_task(self._watch_exit())
             response = await self.request(
                 "initialize",
                 {
@@ -81,6 +86,16 @@ class OpenCodeACP:
     async def _drain(self):
         while await self.process.stderr.read(8192):
             pass  # Provider errors can contain credentials; never persist stderr.
+
+    async def _watch_exit(self):
+        # A child can retain a pipe after the ACP parent dies. Detect our exact
+        # process exit independently of EOF so cleanup closes the owned tree.
+        while self.process.returncode is None:
+            await asyncio.sleep(0.05)
+        self.failure = HybridError("ACP_DISCONNECTED")
+        for future in self.pending.values():
+            if not future.done():
+                future.set_exception(self.failure)
 
     async def _send(self, message):
         try:
@@ -244,18 +259,42 @@ class OpenCodeACP:
             raise
 
     async def close(self):
+        cleanup_error = None
         if self.job:
-            self.job.close()
+            try:
+                self.job.close()
+            except OSError:
+                cleanup_error = HybridError("OWNED_TREE_STOP_UNCONFIRMED")
+        if self.process and os.name != "nt":
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.process.pid, signal.SIGTERM)
         if self.process and self.process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 self.process.terminate()
             try:
                 await asyncio.wait_for(self.process.wait(), 5)
             except TimeoutError:
-                self.process.kill()
+                if os.name != "nt":
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                else:
+                    self.process.kill()
                 await self.process.wait()
-        for task in (self.reader, self.stderr):
+        if self.process and os.name != "nt":
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.process.pid, signal.SIGKILL)
+        for task in (self.reader, self.stderr, self.exit_monitor):
             if task:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        if self.process:
+            # wait() may return an already-known parent exit before descendants
+            # release inherited pipes. Confirm EOF after owned-tree termination.
+            try:
+                await asyncio.wait_for(self.process.communicate(), 5)
+            except (TimeoutError, OSError):
+                cleanup_error = HybridError("OWNED_TREE_STOP_UNCONFIRMED")
+        if cleanup_error:
+            raise cleanup_error
+        self.termination_confirmed = True

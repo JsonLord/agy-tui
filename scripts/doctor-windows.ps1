@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 # No elevation, global settings or execution-policy changes.
 [CmdletBinding()]
-param([string]$InstallRoot, [string]$PythonPath)
+param([string]$InstallRoot, [string]$PythonPath, [string]$McpConfigPath)
 $ErrorActionPreference = 'Stop'
 if (-not $InstallRoot) {
     if (-not $env:LOCALAPPDATA) { throw 'Supply -InstallRoot: LOCALAPPDATA unavailable.' }
@@ -19,5 +19,6 @@ if (-not $PythonPath) {
 }
 $backend = Join-Path $PSScriptRoot 'windows-readiness.py'
 $arguments = @($backend, 'doctor', '--root', $InstallRoot)
+if ($McpConfigPath) { $arguments += @('--mcp-config', $McpConfigPath) }
 & $PythonPath @arguments
 if ($LASTEXITCODE -ne 0) { throw "Operation failed (exit $LASTEXITCODE). Review the diagnostic and installation receipt before retrying." }

@@ -58,13 +58,23 @@ def setup(tmp_path, monkeypatch):
 
 
 def install(setup):
-    return installer.install(SOURCE, setup[0], setup[1], "opencode", "node")
+    return installer.install(
+        SOURCE, setup[0], setup[1], "opencode", "node", manual_registration=False
+    )
 
 
 def test_dry_run_writes_nothing(setup):
     root, config, _ = setup
     before = config.read_bytes()
-    result = installer.install(SOURCE, root, config, "opencode", "node", dry_run=True)
+    result = installer.install(
+        SOURCE,
+        root,
+        config,
+        "opencode",
+        "node",
+        dry_run=True,
+        manual_registration=False,
+    )
     assert (
         result["status"] == "DRY_RUN"
         and not root.exists()
@@ -89,16 +99,21 @@ def test_additive_install_doctor_and_rollback(setup):
     assert WorkspaceRegistry(root / "data/workspaces.json").workspaces == {}
     assert installer.doctor(root)["status"] == "HEALTHY"
     assert (
-        installer.uninstall(root, dry_run=True)["status"] == "DRY_RUN"
+        installer.uninstall(root, dry_run=True, modify_registration=True)["status"]
+        == "DRY_RUN"
         and Path(result["release"]).exists()
     )
-    assert installer.uninstall(root)["status"] == "UNINSTALLED"
+    assert (
+        installer.uninstall(root, modify_registration=True)["status"] == "UNINSTALLED"
+    )
     assert (
         json.loads(config.read_text()) == original
         and not Path(result["release"]).exists()
     )
     assert (root / "data/workspaces.json").exists()
-    assert installer.uninstall(root)["status"] == "UNINSTALLED"
+    assert (
+        installer.uninstall(root, modify_registration=True)["status"] == "UNINSTALLED"
+    )
     assert install(setup)["status"] == "INSTALLED"
 
 
@@ -134,7 +149,7 @@ def test_partial_dependency_failure_has_recovery_receipt(setup, monkeypatch):
         and config.read_bytes() == before
     )
     assert installer.doctor(root)["status"] == "NEEDS_ATTENTION"
-    installer.uninstall(root)
+    installer.uninstall(root, modify_registration=True)
     assert config.read_bytes() == before
 
 
@@ -145,7 +160,7 @@ def test_crash_after_registration_is_recoverable(setup):
     receipt["status"] = "REGISTERING"
     installer.atomic_json(installer.receipt_path(root), receipt)
     assert installer.doctor(root)["status"] == "NEEDS_ATTENTION"
-    installer.uninstall(root)
+    installer.uninstall(root, modify_registration=True)
     assert json.loads(config.read_text()) == original
 
 
@@ -156,7 +171,7 @@ def test_user_edited_entry_stops_rollback(setup):
     setup[1].write_text(json.dumps(document))
     before = setup[1].read_bytes()
     with pytest.raises(installer.InstallError, match="MCP_ENTRY_CHANGED"):
-        installer.uninstall(setup[0])
+        installer.uninstall(setup[0], modify_registration=True)
     assert setup[1].read_bytes() == before and Path(result["release"]).exists()
 
 
@@ -179,7 +194,7 @@ def test_active_or_uncertain_state_blocks_uninstall(setup):
         db.execute("CREATE TABLE runs(status TEXT)")
         db.execute("INSERT INTO runs VALUES('REMOTE_STOP_UNCONFIRMED')")
     with pytest.raises(installer.InstallError, match="RUNS_ACTIVE_OR_UNCERTAIN"):
-        installer.uninstall(setup[0])
+        installer.uninstall(setup[0], modify_registration=True)
 
 
 def test_doctor_detects_source_tampering(setup):
@@ -291,8 +306,6 @@ def test_actual_powershell_dry_run(tmp_path):
             binary,
             "-InstallRoot",
             str(root),
-            "-McpConfigPath",
-            str(config),
             "-DryRun",
         ],
         capture_output=True,
@@ -447,7 +460,7 @@ def test_retained_data_symlink_not_followed(setup, tmp_path):
     if os.name == "nt":
         pytest.skip("Actual Windows reparse behavior requires device validation")
     install(setup)
-    installer.uninstall(setup[0])
+    installer.uninstall(setup[0], modify_registration=True)
     shutil.rmtree(setup[0] / "data")
     outside = tmp_path / "outside"
     outside.mkdir()

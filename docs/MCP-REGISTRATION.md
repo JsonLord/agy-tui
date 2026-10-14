@@ -1,51 +1,55 @@
-# Additive MCP registration
+# Manual hybrid-local MCP registration
 
-Phase 1.2 installs **hybrid-local** over stdio. Argus goal/campaign tools are not
-implemented or registered as placeholders. There is no claim the official AGY
-client has consumed this config; its exact path/schema, live tool access and
-native `/goal` support await Phase 1.5 device evidence.
+Installation now defaults to manual registration. The PowerShell installer has
+no client MCP config argument and does not read or write the user's Antigravity/
+Gemini config. `-ManualMcpRegistration` explicitly selects the same safe default.
+No auto-opt-in is exposed by the CLI. A legacy Python API opt-in remains only
+for compatibility/testing; it is not used by this workstation procedure.
 
-Select the real client's strict-JSON config explicitly with `-McpConfigPath`:
+After local isolated runtime installation, our receipt holds the generated entry
+and `<InstallRoot>/mcp-entry.json` holds this JSON fragment:
 
 ```json
 {
   "mcpServers": {
-    "existing-server": {"command": "existing-command"},
     "hybrid-local": {
       "command": "<absolute installed venv Python executable>",
       "args": ["<absolute installed scripts/hybrid-local.py>"],
       "env": {
-        "HYBRID_WORKSPACES_FILE": "<installation data/workspaces.json>",
-        "HYBRID_STATE_ROOT": "<installation data/state>",
-        "HYBRID_OPENCODE_BIN": "<existing native opencode.exe>"
+        "HYBRID_WORKSPACES_FILE": "<our data/workspaces.json>",
+        "HYBRID_STATE_ROOT": "<our data/state>",
+        "HYBRID_OPENCODE_BIN": "<already installed native opencode.exe>"
       }
     }
   }
 }
 ```
 
-The installer computes absolute paths. It validates unique JSON keys, refuses a
-name collision, preserves other entries/preferences semantically and normalizes
-formatting. Original bytes are compared before atomic replacement to detect
-concurrent edits; close the client to avoid uncooperative writers. Temporary
-atomic-write files are removed on normal failure/completion. The receipt keeps
-only our entry and hashes, not a full backup of other servers' environment secrets.
+The installer computes these values and prints the fragment. The user inserts
+only the hybrid-local entry into the actual client's mcpServers object, retaining
+other servers. Do not overwrite the whole client document with the fragment.
+Never add model/provider/API URL/key/auth profile or target an OpenCode native
+configuration/credential file. No credential store is copied into our receipt.
 
-Never target `opencode.json`, `opencode.jsonc`, `auth.json` or native documents
-with provider/model/agent/`mcp` keys. No model/provider, credentials, agent files
-or Desktop settings are copied/changed. Permission-scoped roles exist only in
-owned ACP process memory and inherit native model selection. New ACP processes
-are not presumed to share Desktop sessions; unowned sessions cannot be adopted.
+Default doctor reads only our files, versions/help and dependency metadata; it
+reports `UNVERIFIED_MANUAL` until explicitly pointed at a client file:
 
-Tool list: `hybrid_workspace_status`, `hybrid_run`, `hybrid_review`,
-`hybrid_supervisor_assist`, `hybrid_status`, `hybrid_start`, `hybrid_resume`.
-Installation checks list/status through local stdio with no provider.
-`hybrid_status` reads durable evidence; `hybrid_workspace_status` opens a
-read-only ACP session to observe native model selection and belongs to deferred
-live-device validation. Successful worker completion remains awaiting validation;
-there is no automatic acceptance/reviewer verdict.
+```powershell
+.\scripts\doctor-windows.ps1 -InstallRoot $install -PythonPath $python `
+  -McpConfigPath 'C:\Actual client config\mcp_config.json'
+```
 
-If the real client uses another schema, stop and adapt only against verified
-client documentation/device behavior. Do not guess an AGY registration location,
-overwrite another server, configure a provider or expose a public port. Follow
-[rollback](ROLLBACK.md) to remove only an unchanged owned entry.
+That check is read-only and reports VERIFIED_EXPLICIT_READ_ONLY or
+MISSING_OR_DIFFERENT; it never repairs/inserts/removes an entry. Do not share the
+whole config: other server environments may contain secrets. An existing legacy
+automatic receipt also requires an explicit path for doctor registration checks.
+
+Uninstall in manual mode leaves the client untouched; the user removes their
+own entry before reopening the client. Legacy automatic receipts fail closed
+with MANUAL_REMOVAL_REQUIRED under CLI rollback rather than silently editing the
+client. No new public transport, service, login, Desktop adoption or Argus tools.
+
+OpenCode 2.0.28 capability detection works, but workers currently fail before ACP
+startup for native-state/plugin-isolation blockers. Registration does not
+constitute successful runtime validation. See OPENCODE-2X-EVIDENCE.md and the
+read-only device commands. Official AGY integration remains deferred.

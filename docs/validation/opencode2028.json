@@ -1,0 +1,62 @@
+{
+  "scope": "immutable OpenCode 2.0.28 capability investigation and manual registration",
+  "starting_remote_sha": "bedba8c4434a0834ed46ca546753f1ae58fe5ae3",
+  "resolver_fix_present_at_start": false,
+  "resolver_port_commit": "f07411718919a53ae89656f919953bcb0226d0f5",
+  "official_source_commit": "026b106bc5d41b679ffc413264229c340871e4d3",
+  "official_source_tag": "v2.0.28",
+  "source_archive_sha256": "92db4b1c94902153ea1d9ea4c7e53df97b60471e563ef22a84fce9e8cb795c6a",
+  "npm_package": "@opencode/cli@2.0.28",
+  "operational_2x_support": false,
+  "worker_blockers": [
+    "OPENCODE_NATIVE_STATE_MUTATION",
+    "OPENCODE_PLUGIN_ISOLATION_UNVERIFIED"
+  ],
+  "2x_binary_installed_or_modified": false,
+  "user_owned_config_mutations": false,
+  "user_workstation_contacted": false,
+  "manual_mcp_registration_default": true,
+  "cli_client_config_mutations": false,
+  "validation": {
+    "retained_hybrid_readiness": 60,
+    "new_resolver_capability_shutdown": 36,
+    "unchanged_legacy_core": 40,
+    "total_passed": 136,
+    "failed": 0,
+    "skipped": 0,
+    "legacy_warnings": 1,
+    "native_windows": "PENDING",
+    "live_2x_runtime": "NOT_RUN_BLOCKED",
+    "real_1x_synthetic_provider_cases": 4,
+    "manual_powershell_linux_transaction": "PASSED; client JSON unchanged"
+  },
+  "precommit_audit": {
+    "commits": 46,
+    "historical_blobs": 299,
+    "unreferenced_blobs": 0
+  },
+  "strong_credential_matches": 0,
+  "portable_source_manifest": {
+    "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "app/schemas.py": "564f4d55f34c8709608aa874ea7171633bf286dd765b8f0702bd8d9f02dc6bdd",
+    "requirements-windows.lock": "4dca0b37d18af6259ecc4e4251c957ee141fabf2dd868471e13bea10bd39c520",
+    "scripts/hybrid-local.py": "84fb7160c7fc18c66ccbf2939f4b449c1505d597f176096d72376ac51a02398a",
+    "scripts/install-smoke.py": "2b0fd05aaa8bda7f8e0beb6868be6e35c8a31c3b22f55be1f10e9c9b392a0a86",
+    "scripts/workspace-discovery.py": "fff45c5981be78afaa7e28d72b0758f900090cab7d687a6b9a86d4375f88e81a",
+    "scripts/windows-readiness.py": "a1b263f13ec68d25a30f719d6596a172675ee1be3a7e36514b5b031fb1b9721c",
+    "scripts/install-windows.ps1": "a81fda39836f450ef45c4135fa28fcffb7bc39b04137def27600f7480a68d566",
+    "scripts/doctor-windows.ps1": "6904fb069bbabcda0534df72483985e2fb1b930c882530bf6210a27c70cf4e8d",
+    "scripts/uninstall-windows.ps1": "cd7b07631cc01180e068d644280fcdaa38a445d4b0086e1a8148d0275b4c2b25",
+    "scripts/opencode-doctor.py": "afa52960ef66d316ce38c245b2b198dae79432c91c449bfa5b1e4f5588da51a3",
+    "app/hybrid_local/__init__.py": "83b7d544c27bc710accb69a6ebf3807558dd9f7e8e3c329fd1391c7d784feeda",
+    "app/hybrid_local/acp.py": "1d13091c98c6a94d49ef6d7d99ae5bbd822401809f2fc778c476bc233b32b9b0",
+    "app/hybrid_local/capabilities.py": "3f3d18c6f9825d4d19eb7e759c061ae172063f74267fd1265137fe003d095584",
+    "app/hybrid_local/discovery.py": "a0772421f271691fdaadce38f7d0ab073247ccd2d2a20f3e57c8f625b73f6ba2",
+    "app/hybrid_local/installation.py": "5a75a5e3a6fcd4957c745bd34140bd88351ffe62abbe7b3a3b708bc4da6befa9",
+    "app/hybrid_local/mcp.py": "66041ec1873f8816517366947e364e8a6cb914784af6d1c3b07623e82280b4a7",
+    "app/hybrid_local/policy.py": "8c59d620fc3f84c595242567c9ded816b93100b64e74fa17e08e7f7b42c6e851",
+    "app/hybrid_local/service.py": "4deb786d629141236d04c73ca621da082284010f08ec2886213f38fd69214fd1",
+    "app/hybrid_local/store.py": "1af09ac0987ddf6643819a5a097671c2ece669c4b19b0208602f18bea315513e",
+    "app/hybrid_local/windows.py": "e50b3511f1fc4adbad6ec606190cc7a4c5112eb2d707a338165708e87d468ed1"
+  }
+}

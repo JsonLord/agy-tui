@@ -15,7 +15,9 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from .windows import native_binary
+from .capabilities import detect_capabilities, validate_version
+from .policy import HybridError
+from .windows import OpenCodeResolutionError, native_binary
 
 SERVER = "hybrid-local"
 OWNER = "agy-argus-hybrid-phase12-v1"
@@ -122,18 +124,17 @@ def run(command, *, environment=None, timeout=120, include_stderr=False):
 def preflight(opencode, node):
     if not (3, 11) <= sys.version_info[:2] < (3, 14):
         raise InstallError("PYTHON_VERSION: use Python 3.11–3.13")
-    binary = native_binary(opencode)
-    version = run([binary, "--version"]).strip()
-    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
-    if not match or not (1, 18, 35) <= tuple(map(int, match.groups())) < (2, 0, 0):
+    try:
+        binary = native_binary(opencode)
+        version = run([binary, "--version"]).strip()
+        validate_version(version)
+        help_text = run([binary, "acp", "--help"], include_stderr=True)
+        capabilities = detect_capabilities(version, help_text)
+    except (HybridError, OpenCodeResolutionError) as error:
         raise InstallError(
-            "OPENCODE_VERSION: baseline 1.18.35 through 1.x accepted; device testing pending"
-        )
-    help_text = run([binary, "acp", "--help"], include_stderr=True)
-    if not all(
-        flag in help_text for flag in ("--cwd", "--pure", "--hostname", "--port")
-    ):
-        raise InstallError("ACP_FLAGS: required bounded ACP options unavailable")
+            error.code
+            + ": existing OpenCode capability/resolution check failed; do not replace the installation"
+        ) from None
     node_path = shutil.which(node) or node
     node_version = run([node_path, "--version"]).strip()
     match = re.fullmatch(r"v(\d+)\.\d+\.\d+", node_version)
@@ -145,6 +146,7 @@ def preflight(opencode, node):
         "node_binary": str(Path(node_path).resolve()),
         "opencode": version,
         "opencode_binary": binary,
+        "opencode_capabilities": capabilities.describe(),
     }
 
 
@@ -160,6 +162,7 @@ def portable_files(source):
         "scripts/install-windows.ps1",
         "scripts/doctor-windows.ps1",
         "scripts/uninstall-windows.ps1",
+        "scripts/opencode-doctor.py",
     ]
     names.extend(
         str(p.relative_to(source))
@@ -239,16 +242,26 @@ def smoke(release, entry):
         raise InstallError("STDIO_SMOKE_FAILED")
 
 
-def install(source, root, config, opencode, node, *, dry_run=False):
-    source, root, config = source.resolve(), root.resolve(), config.resolve()
+def install(
+    source, root, config, opencode, node, *, dry_run=False, manual_registration=True
+):
+    source, root = source.resolve(), root.resolve()
+    config = config.resolve() if config is not None else None
+    if not manual_registration and config is None:
+        raise InstallError("MCP_CONFIG_REQUIRED_FOR_EXPLICIT_LEGACY_MODE")
     if (
         root == source
         or root in source.parents
         or source in root.parents
-        or root == config
-        or root in config.parents
-        or source == config
-        or source in config.parents
+        or (
+            config is not None
+            and (
+                root == config
+                or root in config.parents
+                or source == config
+                or source in config.parents
+            )
+        )
     ):
         raise InstallError(
             "PATH_LAYOUT: source, installation and client config must be separate"
@@ -256,17 +269,21 @@ def install(source, root, config, opencode, node, *, dry_run=False):
     versions = preflight(opencode, node)
     validate_owned_paths(root)
     manifest = {str(p.relative_to(source)): digest(p) for p in portable_files(source)}
-    document, before = config_document(config)
-    if config.name.lower() in {"opencode.json", "opencode.jsonc", "auth.json"} or any(
-        key in document for key in ("provider", "model", "agent", "mcp")
-    ):
-        raise InstallError(
-            "NATIVE_CONFIG_PROTECTED: select client mcpServers config, never OpenCode settings"
-        )
-    if SERVER in document.get("mcpServers", {}):
-        raise InstallError(
-            "MCP_NAME_COLLISION: doctor or uninstall existing owned installation"
-        )
+    document, before = {}, None
+    if not manual_registration:
+        document, before = config_document(config)
+        if config.name.lower() in {
+            "opencode.json",
+            "opencode.jsonc",
+            "auth.json",
+        } or any(key in document for key in ("provider", "model", "agent", "mcp")):
+            raise InstallError(
+                "NATIVE_CONFIG_PROTECTED: select client mcpServers config, never OpenCode settings"
+            )
+        if SERVER in document.get("mcpServers", {}):
+            raise InstallError(
+                "MCP_NAME_COLLISION: doctor or uninstall existing owned installation"
+            )
     if (
         root.exists()
         and any(root.iterdir())
@@ -278,7 +295,10 @@ def install(source, root, config, opencode, node, *, dry_run=False):
     plan = {
         "status": "DRY_RUN" if dry_run else "INSTALLING",
         "root": str(root),
-        "mcp_config": str(config),
+        "mcp_config": str(config) if not manual_registration else None,
+        "registration_mode": "manual"
+        if manual_registration
+        else "automatic_explicit_opt_in",
         "versions": versions,
         "files": sorted(manifest),
         "network_listeners": False,
@@ -301,7 +321,10 @@ def install(source, root, config, opencode, node, *, dry_run=False):
         "root": str(root),
         "release": str(release),
         "status": "PREPARING",
-        "mcp_config": str(config),
+        "mcp_config": str(config) if not manual_registration else None,
+        "registration_mode": "manual"
+        if manual_registration
+        else "automatic_explicit_opt_in",
         "entry": entry,
         "manifest": manifest,
         "versions": versions,
@@ -336,12 +359,18 @@ def install(source, root, config, opencode, node, *, dry_run=False):
         if not registry.exists():
             atomic_json(registry, {"workspaces": {}})
         smoke(release, entry)
-        receipt["status"] = "REGISTERING"
+        if manual_registration:
+            atomic_json(root / "mcp-entry.json", {"mcpServers": {SERVER: entry}})
+        receipt["status"] = (
+            "REGISTRATION_MANUAL" if manual_registration else "REGISTERING"
+        )
         atomic_json(receipt_path(root), receipt)
-        document.setdefault("mcpServers", {})[SERVER] = entry
-        atomic_json(config, document, before, compare=True)
+        if not manual_registration:
+            document.setdefault("mcpServers", {})[SERVER] = entry
+            atomic_json(config, document, before, compare=True)
         receipt["status"] = "INSTALLED"
-        receipt["config_sha_after"] = digest(config)
+        if not manual_registration:
+            receipt["config_sha_after"] = digest(config)
         atomic_json(receipt_path(root), receipt)
     except Exception as error:
         receipt["failed_phase"], receipt["status"] = receipt["status"], "FAILED"
@@ -349,10 +378,18 @@ def install(source, root, config, opencode, node, *, dry_run=False):
         raise InstallError(
             "INSTALL_FAILED: doctor reports last phase; uninstall safely rolls back owned partial installation"
         ) from error
-    return {**plan, "status": "INSTALLED", "release": str(release)}
+    return {
+        **plan,
+        "status": "INSTALLED",
+        "release": str(release),
+        "mcp_entry": {"mcpServers": {SERVER: entry}},
+        "registration_status": "USER_ACTION_REQUIRED"
+        if manual_registration
+        else "REGISTERED",
+    }
 
 
-def doctor(root):
+def doctor(root, config=None):
     root = root.resolve()
     receipt = load_receipt(root)
     release, problems = Path(receipt["release"]), []
@@ -362,9 +399,16 @@ def doctor(root):
         path = release / "source" / name
         if not path.is_file() or digest(path) != value:
             problems.append("SOURCE_HASH_MISMATCH:" + name)
-    document, _ = config_document(Path(receipt["mcp_config"]))
-    if document.get("mcpServers", {}).get(SERVER) != receipt["entry"]:
-        problems.append("MCP_REGISTRATION_MISMATCH")
+    manual = receipt.get("registration_mode") == "manual"
+    registration_status = "UNVERIFIED_MANUAL" if manual else "UNVERIFIED_LEGACY"
+    target = config  # Client config is read only when explicitly requested.
+    if target is not None:
+        document, _ = config_document(target)
+        if document.get("mcpServers", {}).get(SERVER) != receipt["entry"]:
+            registration_status = "MISSING_OR_DIFFERENT"
+            problems.append("MCP_REGISTRATION_MISMATCH")
+        else:
+            registration_status = "VERIFIED_EXPLICIT_READ_ONLY"
     if not python_in(release).is_file():
         problems.append("VENV_MISSING")
     else:
@@ -384,9 +428,12 @@ def doctor(root):
             problems.extend(
                 "DEPENDENCY_VERSION_MISMATCH:" + name for name in mismatches
             )
-            preflight(
+            versions = preflight(
                 receipt["entry"]["env"]["HYBRID_OPENCODE_BIN"],
                 receipt["versions"].get("node_binary", "node"),
+            )
+            problems.extend(
+                versions.get("opencode_capabilities", {}).get("worker_blockers", [])
             )
         except (InstallError, ValueError):
             problems.append("PREREQUISITES_OR_DEPENDENCIES_FAILED")
@@ -394,6 +441,7 @@ def doctor(root):
         "status": "NEEDS_ATTENTION" if problems else "HEALTHY",
         "problems": problems,
         "installation_phase": receipt["status"],
+        "registration_status": registration_status,
         "root": str(root),
         "native_windows_validation": "PENDING",
         "action": "Review phase, rollback and reinstall"
@@ -402,18 +450,25 @@ def doctor(root):
     }
 
 
-def uninstall(root, *, dry_run=False):
+def uninstall(root, *, dry_run=False, modify_registration=False):
     root = root.resolve()
     receipt = load_receipt(root)
     if receipt["status"] == "UNINSTALLED":
         return {"status": "UNINSTALLED", "data_retained": True}
-    config = Path(receipt["mcp_config"])
-    document, before = config_document(config)
-    existing = document.get("mcpServers", {}).get(SERVER)
-    if existing is not None and existing != receipt["entry"]:
-        raise InstallError(
-            "MCP_ENTRY_CHANGED: review edited entry before rollback; no files removed"
-        )
+    manual = receipt.get("registration_mode") == "manual"
+    config, document, before, existing = None, {}, None, None
+    if not manual:
+        if not modify_registration:
+            raise InstallError(
+                "MANUAL_REMOVAL_REQUIRED: legacy automatic receipt; review/remove client entry yourself, do not use automatic rollback"
+            )
+        config = Path(receipt["mcp_config"])
+        document, before = config_document(config)
+        existing = document.get("mcpServers", {}).get(SERVER)
+        if existing is not None and existing != receipt["entry"]:
+            raise InstallError(
+                "MCP_ENTRY_CHANGED: review edited entry before rollback; no files removed"
+            )
     for database in (root / "data/state").glob("*.sqlite3"):
         try:
             db = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)
@@ -453,7 +508,14 @@ def uninstall(root, *, dry_run=False):
         shutil.rmtree(release)
     receipt["status"] = "UNINSTALLED"
     atomic_json(receipt_path(root), receipt)
-    return {"status": "UNINSTALLED", "data_retained": True, "mcp_config_retained": True}
+    return {
+        "status": "UNINSTALLED",
+        "data_retained": True,
+        "mcp_config_retained": True,
+        "registration_action": "Remove your manually inserted client entry yourself"
+        if manual
+        else "owned entry removed",
+    }
 
 
 def main():
@@ -470,8 +532,10 @@ def main():
     args = parser.parse_args()
     try:
         if args.action == "install":
-            if args.mcp_config is None:
-                parser.error("--mcp-config must specify actual client config")
+            if args.mcp_config is not None:
+                parser.error(
+                    "Manual registration only: installation never accepts a client config path; use doctor --mcp-config for read-only validation"
+                )
             result = install(
                 args.source,
                 args.root,
@@ -482,7 +546,7 @@ def main():
             )
         else:
             result = (
-                doctor(args.root)
+                doctor(args.root, args.mcp_config)
                 if args.action == "doctor"
                 else uninstall(args.root, dry_run=args.dry_run)
             )

@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 # No elevation, global settings or execution-policy changes.
 [CmdletBinding()]
-param([string]$InstallRoot, [Parameter(Mandatory=$true)][string]$McpConfigPath,
+param([string]$InstallRoot, [switch]$ManualMcpRegistration,
 [string]$PythonPath, [string]$NodePath = 'node', [string]$OpenCodePath = 'opencode', [switch]$DryRun)
 $ErrorActionPreference = 'Stop'
 if (-not $InstallRoot) {
@@ -20,7 +20,7 @@ if (-not $PythonPath) {
 }
 $backend = Join-Path $PSScriptRoot 'windows-readiness.py'
 $arguments = @($backend, 'install', '--root', $InstallRoot)
-$arguments += @('--source', (Split-Path $PSScriptRoot -Parent), '--mcp-config', $McpConfigPath, '--node', $NodePath, '--opencode', $OpenCodePath)
+$arguments += @('--source', (Split-Path $PSScriptRoot -Parent), '--node', $NodePath, '--opencode', $OpenCodePath)
 if ($DryRun) { $arguments += '--dry-run' }
 & $PythonPath @arguments
 if ($LASTEXITCODE -ne 0) { throw "Operation failed (exit $LASTEXITCODE). Review the diagnostic and installation receipt before retrying." }

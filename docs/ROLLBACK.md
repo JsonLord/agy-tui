@@ -50,3 +50,13 @@ state or corrupt/missing receipt requires local inspection rather than deleting
 arbitrary paths or fabricating ownership. No in-place upgrade or automatic
 restart takeover is attempted. Reinstall a reviewed earlier checkout for rollback
 of application version.
+
+## Current manual-registration default (supersedes automatic-entry steps above)
+
+New receipts say registration_mode=manual. CLI uninstall never edits the client
+configuration: close client, remove the manually inserted hybrid-local entry
+yourself, then uninstall the owned release. Receipt/fragment/evidence are retained.
+Doctor checks registration only with an explicitly supplied client path.
+For legacy automatic receipts, CLI rollback stops with MANUAL_REMOVAL_REQUIRED;
+operator review is required. The old Python mutation paths now require explicit
+API opt-in and are retained for historical regression contracts only.

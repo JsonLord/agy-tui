@@ -35,11 +35,13 @@ only and stopped by fixture teardown. Tests assert unchanged project configs,
 actual distinct provider model invocations, scoped permissions and restart status.
 
 Full installation validation can also run the documented PowerShell scripts on
-Linux with explicit InstallRoot, McpConfigPath, PythonPath and the research
+Linux with explicit InstallRoot, PythonPath and the already present research
 OpenCode binary. Use a disposable root/client JSON outside the checkout with an
 existing server/preferences, install without DryRun, doctor, then uninstall.
 Verify INSTALLED → HEALTHY → UNINSTALLED; preserve other entries/preferences,
-remove release source/venv, retain local registry/evidence. This is not Windows
+remove release source/venv, retain local registry/evidence/fragment. New CLI
+installation never edits the disposable client either; doctor registration checks
+require an explicit config path and manual user insertion. This is not Windows
 compatibility proof. Real Windows, official AGY and authenticated work-PC gates
 remain pending/deferred to Phase 1.5.
 
@@ -49,3 +51,15 @@ document are now committed with the implementation; never assume a live process
 or unpublished workspace state survives. The authorized GitHub branch is the
 persistent source of the recreated commits. No environment publication or
 production deployment is part of this request.
+
+For this task do not run setup-cloud-tests.sh to install OpenCode: existing
+research tools can be used, but OpenCode is an immutable external dependency.
+The new resolver/capability/owned-shutdown suites use synthetic processes, not
+a newly installed OpenCode 2.x binary.
+
+New focused suites: tests/test_opencode_resolution.py,
+tests/test_opencode_capabilities.py and tests/test_owned_process_shutdown.py.
+They add 36 cases. Total focused checks are now 136 when the existing research
+1.x/PowerShell environment variables are provided; skips remain explicit otherwise.
+2.x workers are intentionally blocked before startup for source-proven isolation
+requirements; these tests must not be presented as live 2.x compatibility proof.

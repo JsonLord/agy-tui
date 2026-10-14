@@ -128,3 +128,116 @@ closed. Selected resolver checks: 10 passed (9 new + existing old-layout case).
 These are synthetic Linux contracts; native Windows validation remains pending.
 The resolver port is committed independently before layering capability/manual
 registration changes, without rewriting the fetched branch history.
+
+## 2026-10-14 immutable OpenCode 2.0.28 investigation and safe adaptation
+
+STARTING_REMOTE_SHA: `bedba8c4434a0834ed46ca546753f1ae58fe5ae3`.
+RESOLVER_FIX_PRESENT at start: **false**. The missing modern resolver was ported
+first in `f07411718919a53ae89656f919953bcb0226d0f5`, not assumed from unprovided
+native-Windows reports. Their claimed ~118 passes/live validation are not reused.
+
+Exact official tag v2.0.28 source:
+`026b106bc5d41b679ffc413264229c340871e4d3`, npm `@opencode/cli@2.0.28` metadata.
+Downloaded source archive SHA-256:
+`92db4b1c94902153ea1d9ea4c7e53df97b60471e563ef22a84fce9e8cb795c6a`.
+Source/docs/tests inspected without installing, compiling or patching OpenCode.
+Complete findings and exact device commands: **OPENCODE-2X-EVIDENCE.md**.
+
+### Important unmet operational requirements
+
+This is **not a claim that 2.0.28 workers now satisfy every requested invariant**.
+The old flags have source-proven replacements for workspace and network context:
+OS cwd plus absolute ACP session cwd, stdio ACP, owned `serve --stdio --port 0`
+child with default `127.0.0.1` and random lease authentication. It does have an
+internal HTTP listener despite no ACP TCP endpoint.
+
+However, native credentials and sessions share the writable native database.
+Starting its private server can create/migrate/chmod/WAL that database; redirecting
+or copying it breaks the no-auth-profile-override/no-credential-duplication rules.
+No separate read-only native credential store with writable owned sessions was
+established. Plugin wildcard removals exist, but operate after earlier module
+load/install/import operations and may also disable native integrations; they
+are not proof of old --pure's external-code exclusion. A pre-load integration
+policy gate exists, but higher-priority native/organization policy can override
+an inline denial; universal enforcement under unknown native policies is unverified.
+
+The explicit capability layer recognizes **2.0.28** and its candidate flagless
+launch contract, allows manual installation/metadata diagnostics, but blocks
+before spawning ACP with `OPENCODE_NATIVE_STATE_MUTATION` and reports
+`OPENCODE_PLUGIN_ISOLATION_UNVERIFIED`. This replaces arbitrary <2 rejection
+with precise source-derived blockers; unknown versions still fail before ACP
+help/startup. No bypass flag, workaround credentials copy, project-config disable,
+model/provider/URL/key/auth override, or fake 2.x success trace was introduced.
+An operational 2.x worker requires supported upstream isolation or a separately
+revised user contract. Device testing cannot invalidate these source facts.
+
+### Implemented and verified changes
+
+* Current npm `@opencode/cli` metadata/native exe and old-layout resolver,
+  `.cmd`/`.ps1`/extensionless locators without executing/reading shim text,
+  path-escape/missing/blocked-executable diagnostics.
+* Central pinned capabilities for 1.18.35 and 2.0.28, no scattered major-version
+  bypasses. Existing 1.18.35 full bounded argv retained. Unknown/contradictory
+  help contracts fail, and 2.x's unfulfilled properties are explicit data.
+* Manual registration is the installer/PowerShell default. CLI installation has
+  no client config path; only our receipt/root mcp-entry.json/output stores the
+  computed fragment. Doctor checks client registration only on explicit path and
+  reports UNVERIFIED_MANUAL, VERIFIED_EXPLICIT_READ_ONLY or mismatch honestly.
+  The old Python mutation API requires explicit opt-in solely for compatibility
+  contracts, and is never selected by user-facing CLI. CLI legacy rollback fails
+  closed for operator manual removal instead of editing the client.
+* Read-only version/help/config-hash diagnostic, no ACP/session/inference or
+  credential-file contents. No user workstation interaction attempted.
+* Existing scoped permissions, model/provider inheritance and poisoned-Argus
+  stripping preserved. Owned Windows Job Object retained with CloseHandle failure
+  detection. Owned POSIX process group, parent-exit observer and bounded EOF drain
+  added: inherited child pipes cannot hide an ACP crash. Cancellation/timeout/
+  crash kill owned descendants only; uncertain turn/cleanup retains a lease and
+  blocks duplicate dispatch. No kill by executable name or Desktop adoption.
+
+### Fresh evidence levels
+
+IMPLEMENTED: resolver, capability classification/blockers, manual registration,
+read-only diagnostics, conservative shutdown and docs above.
+
+TESTED SYNTHETICALLY: new capability/version/cwd/Windows-path contracts, no unsafe
+2.x startup/native config changes, environment inheritance, manual fragment/doctor
+behavior, blocked executable, and actual controlled POSIX owned-tree shutdown with
+unrelated process preservation. These are not a live OpenCode 2.x provider proof.
+
+Existing real 1.18.35 synthetic-provider regression tests remain independent:
+two workspace model invocations, permissions, resume and MCP restart. No 2.x
+binary was installed/upgraded/downgraded/replaced or used as a real worker.
+
+VALIDATED ON NATIVE WINDOWS: **none in this session**; all actual Windows 11/
+2.0.28 Job Object, resolver and filesystem/runtime tests remain user-run/pending.
+DEFERRED TO PHASE 1.5: after state/plugin blockers are resolved, native A/B cwd/
+model/provider invocation, config integrity, loopback ephemeral listener/lease,
+owned child shutdown and unrelated Desktop survival, resume/restart evidence.
+ClickUp, /goal, Argus orchestration, pools and deployment remain out of scope.
+
+Focused validation: 60 previous hybrid/readiness cases retained (legacy mutation
+contracts explicitly opt in; CLI assertions now test manual nonwrites), 36 new
+resolver/capability/shutdown cases, 40 unchanged legacy core cases = **136**.
+The final completed test/audit results and exact checked adaptation SHA are
+recorded by the following evidence commit. `docs/validation/opencode2028.json`
+records this task separately from the historical Phase 1.2 manifest.
+
+A real PowerShell 7.5.3-on-Linux manual transaction using the **already present**
+1.18.35 research executable passed: INSTALLED/USER_ACTION_REQUIRED →
+HEALTHY/UNVERIFIED_MANUAL → UNINSTALLED; pre-existing client JSON remained
+unchanged throughout, fragment matched output, source/venv removed, data retained.
+Our runtime dependencies were installed only in this disposable isolated venv;
+OpenCode/Node/Python installations and global PATH/security controls were untouched.
+
+The mandatory user-defined final summary and the explicit answer to all five
+safety/evidence questions are also documented in OPENCODE-2X-EVIDENCE.md.
+
+Completed validation for the above changes: **136 passed, 0 failed, 0 skipped**
+(96 focused hybrid/readiness/new cases + 40 unchanged legacy cases; one old
+return-value warning). Ruff/format/compile/diff checks passed. Final manual
+PowerShell/Linux transaction was repeated after packaging the diagnostic:
+INSTALLED/USER_ACTION_REQUIRED → HEALTHY/UNVERIFIED_MANUAL → UNINSTALLED,
+with client JSON unchanged throughout. Native Windows and live 2.x remain
+unrun; 2.x workers remain deliberately blocked, not accepted as ready.
+Fresh versioned evidence: `docs/validation/opencode2028.json`.

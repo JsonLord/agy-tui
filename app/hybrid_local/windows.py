@@ -91,7 +91,7 @@ def process_options() -> dict:
             | subprocess.CREATE_NO_WINDOW
         }
         if os.name == "nt"
-        else {}
+        else {"start_new_session": True}
     )
 
 
@@ -179,5 +179,6 @@ class OwnedWindowsJob:
 
     def close(self):
         if self.handle:
-            self.kernel.CloseHandle(self.handle)
+            if not self.kernel.CloseHandle(self.handle):
+                raise OSError("Owned job termination unconfirmed")
             self.handle = None

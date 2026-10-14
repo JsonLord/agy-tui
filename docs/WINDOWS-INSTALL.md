@@ -9,21 +9,23 @@ PowerShell 7.5.3 on Linux, not a Windows kernel or Windows PowerShell 5.1.
 ## Prerequisites
 
 Windows 10/11, PowerShell 5.1 or 7, Python 3.11–3.13, Node 22/24 LTS and an
-existing native OpenCode installation. Preflight accepts OpenCode 1.18.35–1.x
-and checks its ACP flags. Accepted ranges are not a certified version/platform
+existing native OpenCode installation. Preflight recognizes pinned 1.18.35 and
+2.0.28 contracts. 2.0.28 runtime installation is allowed, but worker execution
+is blocked by source-proven native-state/plugin-isolation requirements; see
+[exact source evidence](OPENCODE-2X-EVIDENCE.md). Accepted ranges are not a certified version/platform
 matrix; tested Linux versions are recorded in IMPLEMENTATION-REPORT.
 
-Install missing prerequisites using their official per-user installers. Our
-scripts do not install/upgrade OpenCode or Node, elevate, change global PATH,
+Use the existing installed prerequisites. Stop and report missing/unsupported
+versions; this task must not install, replace, upgrade or downgrade OpenCode,
+Node or Python. Our scripts do not elevate or change global PATH,
 execution policy or Desktop configuration. Python discovery supports normal
 executables and the Windows `py.exe` launcher. Pass executable paths explicitly
 when discovery fails. An npm `opencode.cmd` is only a locator for the native
 package's `opencode.exe`; its shell text is never read or executed.
 
-Close the MCP client while editing its configuration. Determine its real,
-strict-JSON `mcpServers` file (see MCP-REGISTRATION); never select OpenCode's
-provider/model/agent configuration or `auth.json`. Actual official AGY config
-location and client support remain device-validation questions.
+The user manages client MCP registration manually. Installation does not accept
+or read a client config path. Doctor reads a strict-JSON mcpServers file only
+when explicitly given -McpConfigPath; see MCP-REGISTRATION.
 
 ## Install and diagnose
 
@@ -31,11 +33,10 @@ From the reviewed checkout:
 
 ```powershell
 $install = Join-Path $env:LOCALAPPDATA 'AGYArgusHybrid'
-$config = 'C:\Client configuration\mcp-servers.json' # Replace with the actual client file.
-.\scripts\install-windows.ps1 -InstallRoot $install -McpConfigPath $config `
+.\scripts\install-windows.ps1 -InstallRoot $install -ManualMcpRegistration `
   -PythonPath 'C:\Python313\python.exe' -OpenCodePath 'C:\OpenCode\opencode.exe' -DryRun
 # After reviewing the plan, omit -DryRun:
-.\scripts\install-windows.ps1 -InstallRoot $install -McpConfigPath $config `
+.\scripts\install-windows.ps1 -InstallRoot $install -ManualMcpRegistration `
   -PythonPath 'C:\Python313\python.exe' -OpenCodePath 'C:\OpenCode\opencode.exe'
 .\scripts\doctor-windows.ps1 -InstallRoot $install -PythonPath 'C:\Python313\python.exe'
 ```
@@ -58,14 +59,17 @@ An external data directory stores the initially empty workspace registry and
 SQLite evidence. The receipt journals installation phase, source SHA-256
 manifest, versions and only our nonsecret MCP entry. The real local stdio smoke
 checks initialization, all seven tools and `hybrid_status` without OpenCode.
-Registration occurs last. No public listener, service, scheduled task, firewall
+After smoke, mcp-entry.json is generated only in our installation root.
+The user inserts its hybrid-local fragment manually; no client file is edited. No public listener, service, scheduled task, firewall
 rule or global credentials are created. Later authorized ACP tasks use explicit
 loopback/ephemeral-port arguments; these are not public endpoints.
 
 Doctor verifies receipt/phase, file hashes, exact registration, imports, locked
 installed dependency versions/markers and prerequisite versions/ACP flags. It
 does not open ACP sessions or production providers. `HEALTHY` means local
-installation checks passed, not real-device integration approval.
+installation checks passed, not registration/device approval. UNVERIFIED_MANUAL
+reports registration honestly until an explicit doctor -McpConfigPath read.
+2.0.28 reports NEEDS_ATTENTION with worker blockers; do not downgrade OpenCode.
 
 ## Read-only discovery and explicit registration
 
@@ -101,7 +105,7 @@ because paths and session identifiers may be personal information.
 
 | Diagnostic | Action |
 | --- | --- |
-| PYTHON/NODE/OPENCODE_VERSION, ACP_FLAGS | Supply an accepted existing executable; do not overwrite Desktop settings. |
+| PYTHON/NODE_VERSION, ACP_FLAGS, OPENCODE_CAPABILITIES_UNVERIFIED | Supply an accepted existing executable; do not overwrite Desktop settings. |
 | PROCESS_FAILED, INSTALL_FAILED | Inspect receipt phase; check permissions, paths, proxy/CA trust and wheel availability. Raw subprocess output is suppressed to avoid exposing secrets. |
 | MCP_CONFIG_FORMAT, NATIVE_CONFIG_PROTECTED | Select actual strict-JSON client mcpServers config. JSONC/duplicate keys/native provider documents are unsupported. |
 | MCP_NAME_COLLISION, INSTALLATION_EXISTS | Doctor existing installation, safely uninstall, then reinstall. Never replace an unrelated server. |
@@ -124,3 +128,6 @@ actual Windows job/process-child termination, path isolation and persisted ACP
 sessions. Then verify two workspaces' **existing** models/providers, official
 AGY tool access and `/goal` behavior. Do not set models to make tests pass.
 ClickUp approvals and maintained Argus child/integration runtime remain later work.
+
+Current 2.x state/plugin blockers and exact read-only device commands are in
+OPENCODE-2X-EVIDENCE.md. Native Windows validation remains pending.
