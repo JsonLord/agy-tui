@@ -346,3 +346,5 @@ matches are legacy environment identifiers; credential-URL matches are a synthet
 negative-policy test. Legacy personal paths/emails remain disclosed, history not
 rewritten. New code/state contains no persisted API credential. Exact checked
 implementation SHA and post-commit audit are recorded in the next evidence commit.
+
+Checked factory implementation commit: `5001fa40d6ef785b328244f06c04b2bd1fe967a5`. Post-commit audit: 50 commits, 340 blobs, zero strong token/key matches; synthetic credential-URL and legacy identifier findings reviewed. Versioned evidence: `docs/validation/factory-control-plane.json`. The next commit records evidence without changing runtime code.

@@ -1,0 +1,54 @@
+{
+  "base_sha": "44d6356ebb25b3d6a1ff1303a39b5f902899ff29",
+  "branch": "integration/factory-control-plane",
+  "checked_implementation_sha": "5001fa40d6ef785b328244f06c04b2bd1fe967a5",
+  "remote": "https://github.com/JsonLord/agy-tui.git",
+  "new_factory_tests": 36,
+  "focused_passed": 179,
+  "focused_skipped": 1,
+  "legacy_passed": 40,
+  "total_passed": 219,
+  "total_failed": 0,
+  "skip_reason": "PowerShell/OpenCode installation dry-run excluded; no local OpenCode needed or invoked",
+  "legacy_warning": "Existing PytestReturnNotNoneWarning",
+  "evidence_levels": {
+    "stdio_restart": "actual local MCP subprocesses against synthetic Automaker HTTP fixture",
+    "concurrency_and_recovery": "synthetic tests",
+    "native_windows": "NOT_RUN",
+    "production_services": "NOT_RUN"
+  },
+  "automaker_source_sha": "5888d2e6f3618e06762803687ea7b181c10edcbd",
+  "foreman_dependency": "none",
+  "local_opencode_required": false,
+  "workers_launched": false,
+  "argus_boundary": "external argus-skill 0.1.1/lbx154/Argus; AGY import contract only",
+  "approval_verification": "manual trusted operator assertion; no external identity/ClickUp verification",
+  "audit": {
+    "commits": 50,
+    "blobs": 340,
+    "unreferenced_blobs": 0,
+    "strong_token_key_matches": 0,
+    "credential_url_matches": "synthetic negative-test fixture",
+    "credential_literal_matches": "legacy environment identifiers",
+    "privacy": "legacy personal paths and author emails retained; no history rewrite"
+  },
+  "known_limits": [
+    "External auto-mode must stay off; no atomic lock against other clients",
+    "No task-level partial approval within one envelope",
+    "Cross-project DAG edges rejected",
+    "Ambiguous absent creates require operator investigation",
+    "Evidence/review/execution adapters and installer bundling future work"
+  ],
+  "files_changed": [
+    "app/factory_local/__init__.py",
+    "app/factory_local/mcp.py",
+    "app/factory_local/schemas.py",
+    "app/factory_local/service.py",
+    "app/factory_local/store.py",
+    "docs/FACTORY-CONTROL-PLANE.md",
+    "docs/IMPLEMENTATION-REPORT.md",
+    "scripts/factory-local.py",
+    "tests/test_factory_local.py",
+    "docs/validation/factory-control-plane.json"
+  ]
+}
